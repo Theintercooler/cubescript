@@ -1,15 +1,16 @@
 local string = require "string"
 local table = require "table"
-local utils = require "utils"
-local fs = require "fs"
-local core = require "core"
+local core = require "luvit.core"
+
+local utils = require "luvit.utils"
+utils.DUMP_MAX_DEPTH = 100
 
 function string.split(str, pat)
     local t = {} -- NOTE: use {n = 0} in Lua-5.0
             local fpat = "(.-)" .. pat
     local last_end = 1
     local s, e, cap = str:find (fpat, 1)
-    
+
     while s do
         if s ~= 1 or cap ~= "" then
             table.insert(t, cap)
@@ -24,412 +25,842 @@ function string.split(str, pat)
     return t
 end
 
-local Line = core.Emitter:extend()
+local Buffer = core.Object:extend()
 
-function Line:initialize(line)
+function Buffer:initialize(string)
+    if type(string) ~= "string" then
+        error("No string was given for argument #1")
+    end
     self.i = 0
-    self.chars = {}
-    local i = 1
-    for c in line:gmatch(".") do
-        self.chars[i] = c
-        i = i + 1
+    self.chars = string
+end
+
+function Buffer:skipChar()
+    self.i = self.i + 1 
+end
+
+function Buffer:getChar()
+   self:skipChar()
+
+   if self.i  > self.chars:len() or self.i < 0 then
+       return nil
+   end
+
+   return self.chars:sub(self.i, self.i)
+end
+
+function Buffer:peekChar(peek)
+    peek = peek or 1
+    if self.i + peek > self.chars:len() or self.i < 0 then
+        return nil
+    end
+
+    return self.chars:sub(self.i + peek, self.i + peek)
+end
+
+function Buffer:undoChar()
+    self.i = self.i - 1
+    return self:peekChar(0)
+end
+
+local tokenType = {
+    comment     = "comment",
+    string      = "string",
+    word        = "word",
+    alias       = "alias",
+    macro       = "macro",
+    endStatement= "endStatement",
+    operator    = "operator",
+    seperator   = "seperator",
+    endOfBuffer = "endOfBuffer",
+    call        = "call",
+    number      = "number"
+}
+
+local Token = core.Object:extend()
+
+function Token:initialize(tokenType)
+    self.type = tokenType
+end
+
+local function isAlpha(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+local function isNumeric(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 48 and c <= 57)
+end
+
+local function isAlphaNumeric(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+local function isLineSeperator(char)
+    if not char then return end
+    local c = char:byte()
+    return c == 10 or c == 13
+end
+
+local function isWhiteSpace(char)
+    if not char then return end
+    local c = char:byte()
+    return c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
+end
+
+local Lexer = core.Object:extend()
+
+function Lexer:initialize()
+
+end
+
+function Lexer:error(message, wrongChar, buffer)
+    local location = buffer.i
+
+    local line = ""
+
+    while not isLineSeperator(buffer:undoChar()) do 
+        if not buffer:peekChar() then
+            p(buffer:getChar())
+            break
+        end
+    end
+
+    local offset = 0
+    local char = buffer:getChar()
+    while char and not isLineSeperator(char) do
+        line = line .. char
+        char = buffer:getChar()
+        if buffer.i <= location then
+            offset = offset + 1
+        end
+    end
+
+    local arrow = ("."):rep(offset) .. "^"
+
+    if wrongChar then
+        if isLineSeperator(wrongChar) then
+            char = "<eol>"
+        end
+        message = message .." got: "..tostring(wrongChar)
+    end
+    message = message .. "\n"..line .. "\n" .. arrow
+    error (message)
+end
+
+function Lexer:skipWhiteSpace(buffer)
+    while isWhiteSpace(buffer:peekChar()) and not isLineSeperator(buffer:peekChar()) do
+        buffer:skipChar()
     end
 end
 
-function Line:getChar()
-   self.i = self.i + 1
-   return self.chars[self.i]
+function Lexer:readUntilWhiteSpace(buffer)
+    local s = ""
+    while not isWhiteSpace(buffer:peekChar()) do
+        s = s .. buffer:getChar()
+    end
+    return s
 end
 
-function Line:peekChar()
-    return self.chars[self.i+1]
-end
+function Lexer:parseString(buffer)
+    local stringType = buffer:getChar()
+    if stringType == "\"" then
+        local token = Token:new(tokenType.string)
+        token.value = ""
 
-local Lexer = core.Emitter:extend()
-
-function Lexer:initialize(contents)
-    self.i = 0
-    self.lines = ""
-end
-
-function Lexer:getNext()
-    self.i = self.i + 1
-    return self.lines[self.i]
-end
-
-function Lexer:process(code)
-    self.i = 0
-    self.lines = code:split("\n")
-    
-    local line = self:getNext()
-    local calls = {}
-    
-    while line do
-        local curLine = Line:new(line)
-        local subject = ""
-        local operation = "call"
-        local char
-        local c
-        
-        ::restart::
-        
-        c = curLine:getChar()
-        while c do
-            if c ~= " " and c ~= "\t" then
-                if c == "/" then
-                    local c2 = curLine:peekChar()
-
-                    if c2 == "/" then
-                        goto skip
-                        --Skip this line
-                    elseif c2 == "*" then
-                        while line do
-                            c = curLine:getChar()
-                            while c do
-                                
-                                if c == "*" and curLine:peekChar() == "/" then
-                                   --Comment is finished
-                                    curLine:getChar() -- Skip /
-                                    goto restart
-                                end
-                                
-                                c = curLine:getChar() 
-                            end
-                            
-                            line = self:getNext()
-                            curLine = Line:new(line)
-                        end
-                        --Multi-line comment
-                        -- TODO: implement
-                    end
-                else
-                    curLine. i = curLine. i - 1
-                end
+        local char = buffer:getChar()
+        while char do
+            if char == "^" then
+                char = self:readEscapeSequence(buffer)
+            elseif char == stringType then
                 break
             end
-            c = curLine:getChar()
-        end
-        
-        --empty line
-        if c == nil then
-           goto skip 
+
+            token.value = token.value .. char
+
+            char = buffer:getChar()
         end
 
-        c = curLine:getChar()
-        
-        while c do
-            if c ~= " " and c ~= "\t" then
-                subject = subject .. c
+        if char ~= stringType then
+            self:error("Expected closing "..stringType, char, buffer)
+        end
+
+        return token
+    else
+        local token = Token:new(tokenType.string)
+        local parts = {}
+        local stack = 1
+
+        local char = buffer:peekChar()
+        while char do
+            if char == "@" then
+                local oldI = buffer.i
+                char = self:parseMacro(buffer)
+                if char.stack < stack then
+                    buffer.i = oldI
+                    char = buffer:getChar()
+                end
             else
+                char = buffer:getChar()
+                if char == "]" then
+                    stack = stack - 1
+
+                    if stack == 0 then
+                        break
+                    end
+                elseif char == "[" then
+                    stack = stack + 1
+                end
+            end
+
+            parts[#parts+1] = char
+
+            char = buffer:peekChar()
+        end
+
+        token.value = {}
+
+        local currentString = nil
+        for k, v in pairs(parts) do
+            if type(v) == "string" then
+                currentString = (currentString or "") .. v
+            else
+                if currentString then
+                    table.insert(token.value, currentString)
+                    currentString = nil
+                end
+
+                table.insert(token.value, v)
+            end
+        end
+
+        if currentString then
+            table.insert(token.value, currentString)
+            currentString = nil
+        end
+
+        return token
+    end
+end
+
+function Lexer:parseAlias(buffer)
+    local token = Token:new(tokenType.alias)
+    local char = buffer:getChar()
+
+    local word = self:parseWord(buffer)
+
+    token.value = word.value
+
+    return token
+end
+
+function Lexer:parseWord(buffer)
+    local token = Token:new(tokenType.word)
+    local char = buffer:peekChar()
+
+    token.value = {}
+
+    local stringValue = ""
+    while char and not isWhiteSpace(char) do
+        char = buffer:getChar()
+        --buffer:skipChar()
+
+        if char == "@" then
+            table.insert(token.value, stringValue)
+            stringValue = nil
+            buffer:undoChar()
+            table.insert(token.value, self:parseMacro(buffer))
+        else
+            stringValue = (stringValue or "") .. char
+        end
+
+        char = buffer:peekChar()
+    end
+
+    if stringValue then
+        table.insert(token.value, stringValue)
+    end
+
+    return token
+end
+
+function Lexer:parseNumber(buffer)
+    local token = Token:new(tokenType.number)
+    local char = buffer:getChar()
+    token.value = 0
+
+    local negative = false
+
+    if char == "-" or char == "+" then
+        negative = char == "-"
+        char = buffer:getChar()
+    end
+
+    local base = 10
+    local numberType = "d"
+
+    if char == "0" and isAlpha(buffer:peekChar()) then
+        numberType = buffer:getChar()
+        char = buffer:getChar()
+    end
+
+    if numberType == "d" then
+    elseif numberType == "x" then
+        base = 16
+    elseif numberType == "b" then
+        base = 2
+    end
+    local noPeek = false
+    while char and not isWhiteSpace(char) do
+        if noPeek then
+            buffer:skipChar()
+        end
+
+        local value = ({
+            ["0"] = 0,
+            ["1"] = 1,
+            ["2"] = 2,
+            ["3"] = 3,
+            ["4"] = 4,
+            ["5"] = 5,
+            ["6"] = 6,
+            ["7"] = 7,
+            ["8"] = 8,
+            ["9"] = 9,
+            ["a"] = 10,
+            ["b"] = 11,
+            ["c"] = 12,
+            ["d"] = 13,
+            ["e"] = 14,
+            ["f"] = 15
+        })[char:lower()]
+
+        if type(value) == "nil" then
+            self:error("Invalid number", char, buffer)
+        end
+
+        token.value = token.value * base + value
+
+        char = buffer:peekChar()
+        noPeek = true
+    end
+
+    if negative then
+        token.value = -token.value
+    end
+
+    return token
+end
+
+function Lexer:parseMacro(buffer)
+    local char = buffer:peekChar()
+    local token = Token:new(tokenType.macro)
+
+    token.stack = 0
+
+    while char == "@" do
+        token.stack = token.stack + 1
+        buffer:skipChar()
+        char = buffer:peekChar()
+    end
+
+    if token.stack == 0 then
+        self:error("Expecting start of macro", char, buffer)
+    end
+
+    if char == "[" then
+        token.value = self:parseString(buffer)
+    else
+        token.value = ""
+        char = buffer:peekChar()
+
+        while char and isAlphaNumeric(char) do
+            char = buffer:getChar()
+
+            token.value = token.value .. char
+
+            char = buffer:peekChar()
+        end
+
+        if not isWhiteSpace(char) then
+            char = buffer:getChar()
+            self:error("Expecting end of macro", char, buffer)
+        end
+    end
+
+    return token
+end
+
+function Lexer:parseCall(buffer)
+    --TODO: macros!
+    local open = buffer:getChar()
+    assert(open == "(")
+
+    local token = Token:new(tokenType.call)
+    token.value = ""
+    local stack = 1
+    local char = buffer:getChar()
+    while char do
+        if char == "(" then
+            stack = stack + 1
+        elseif char == ")" then
+            stack = stack - 1
+
+            if stack == 0 then
                 break
             end
-            c = curLine:getChar()
         end
-        
-        
-        do
-            local starti = curLine.i
-            
-            c = curLine:getChar()
-            while c do
-                if c == "=" then
-                    operation = "set"
-                elseif c ~= " " and c ~= "\t" then
-                    starti = curLine.i
-                    break
-                end
-                c = curLine:getChar()
-            end
-            curLine.i = starti - 1
-        end
-        
-        if operation == "set" then
-            line = "set \"" .. subject .."\" ".. line:sub(curLine.i)
-            curLine = Line:new(line)
-            subject = "set"
-            operation = "call"
-            curLine.i = 3
-        end
-        
-        if operation == "call" then
-            --Parse arguments
-            
-            local callArgs = {}
-            c = curLine:getChar()
-            while c do
-                if c == " " or c == "\t" then
-                    --Ignore
-                elseif c == "(" then
-                    local command = ""
-                    
-                    -- ( in ( in ( ...
-                    local count = 1
-                    local d
-                    
-                    d = curLine:getChar()
-                    while d do
-                        
-                       if d == ")" then
-                           count = count - 1
-                       elseif d == "(" then
-                           count = count + 1
-                       else
-                           command = command .. d
-                       end
-                       
-                       if count == 0 then
-                           break
-                       end
-                       
-                       d = curLine:getChar()
-                    end
-                    
-                    if count ~= 0 then
-                       error("Missing ) on line: "..line) 
-                    end
-                    
-                    --Pass by result
-                    table.insert(callArgs, {true, command})
-                
-                --Single line string
-                elseif c == "\"" then
-                    local argument = ""
-                    local d
-                    
-                    d = curLine:getChar()
-                    while d do
-                        if d == "\"" then
-                            break
-                        else
-                            argument = argument .. d
-                        end
-                        d = curLine:getChar()
-                    end
-                    table.insert(callArgs, {false, argument})
-                
-                -- Multi line string
-                elseif c == "[" then
-                    local argument = ""
-                    
-                    -- ( in ( in ( ...
-                    local count = 1
-                    
-                    repeat
-                        local d
-                        
-                        d = curLine:getChar()
-                        while d do
-                            
-                            if d == "]" then
-                                count = count - 1
-                            elseif d == "[" then
-                                count = count + 1
-                            else
-                                argument = argument .. d
-                            end
-                            
-                            if count == 0 then
-                                break
-                            end
-                            d = curLine:getChar()
-                        end
-                    
-                        --Read on to the next line
-                        if count ~= 0 then
-                            argument = argument .. "\n"
-                           line = self:getNext()
-                           curLine = Line:new(line)
-                           if not line then
-                               error("Unfihished string near EOF")
-                           end
-                        end
-                    until count == 0
-                    
-                    table.insert(callArgs, {false, argument})
-                elseif c == "$" or c == "@" then
-                    local argument = ""
-                    local d
-                    
-                    d = curLine:getChar()
-                    while d do
-                        
-                        if d == " " or d == "\t" then
-                            break
-                        else
-                            argument = argument .. d
-                        end
-                        d = curLine:getChar()
-                    end
-                    
-                    argument = "get \""..argument.."\""
-                    
-                    table.insert(callArgs, {true, argument})
-                end
-                --Todo add support for strings without "
-                c = curLine:getChar()
-            end
-            
-            table.insert(calls, {subject, callArgs})
-        end
-    
-        
-        ::skip::
-        line = self:getNext()
+
+        token.value = token.value .. char
+
+        char = buffer:getChar()
     end
-    
-    return calls
+
+    if char ~= ")" then
+        self:error("Expected closing )", char, buffer)
+    end
+
+    return token
 end
 
-local Environment = core.Emitter:extend()
-
-function Environment:initialize()
-   self.globals = {} 
-   self.lexer = Lexer:new()
-end
-
-function Environment:getGlobal(name)
-    
-    if type(self.globals[name]) == "nil" then
-        p("WARNING: unkown global: "..name)
+function Lexer:parseOperator(buffer)
+    local op = self:readUntilWhiteSpace(buffer)
+    if op ~= "=" then
+        self:error("Unkown operator: ", op, buffer)
     end
-    
-   return self.globals[name] or ""
+
+    local token = Token:new(tokenType.operator)
+    token.value = "="
+    return token
 end
 
-function Environment:setGlobal(name, value)
-    self.globals[name] = tostring(value or "")
+function Lexer:parseSeperator(buffer)
+    local seperator = buffer:getChar()
+    assert(seperator == ";" or seperator == "\n")
+    return Token:new(tokenType.seperator)
 end
 
-function Environment:setGlobalFunction(name, value)
-    self.globals[name] = value
-end
+function Lexer:parseComment(buffer)
+    local char = buffer:getChar()
 
-function Environment:run(string)
-    local calls = self.lexer:process(string)
-    local lastRes
-    
-    self:setGlobalFunction("result", function(env, result)
-        lastRes = result
-    end)
-    
-    for i, call in pairs(calls) do
-        local func = self:getGlobal(call[1])
-        
-        for j, arg in pairs(call[2]) do
-           if arg[1] then
-              
-              call[2][j] = self:run(arg[2]) 
-           else
-               call[2][j] = arg[2]
-           end
+    local token = Token:new(tokenType.comment)
+    token.value = ""
+
+    if char == "#" or char == "/" and buffer:peekChar() == "/" then 
+        if char == "/" then
+            buffer:getChar() -- skip the second slash
         end
-        
-        local res
-        if type(func) == "string" then
-            res = self:run(func)
-        else --Global function
-            res = func(self, unpack(call[2]))
+
+        char = buffer:getChar()
+
+        while char and char ~= "\n" and char ~= "\r" do
+            token.value = token.value .. char
+            char = buffer:getChar()
         end
-        
-        if res then
-            lastRes = res
+    elseif char == "/" and buffer:peekChar() == "*" then
+        buffer:getChar() -- skip the *
+        char = buffer:getChar()
+
+        while char and not (char == "*" and buffer:peekChar() == "/") do
+            token.value = token.value .. char
+            char = buffer:getChar()
         end
+        buffer:getChar() -- skip the ending /
+    else
+        self:error ("Malformatted comment", char, buffer)
     end
-    
-    return lastRes
+
+    return token
 end
 
-local env = Environment:new()
-env:setGlobalFunction("if", function(env, cond, case1, case2)
-    if tonumber(cond) then
-        env:run(case1)
-    elseif case2 then
-        env:run(case2)
+function Lexer:parseEndOfBuffer()
+    return Token:new(tokenType.endOfBuffer)
+end
+
+local _valid_var_chars = {
+    ["+"] = true,
+    ["-"] = true,
+    ["*"] = true,
+    ["="] = true,
+    ["<"] = true,
+    [">"] = true
+}
+function Lexer:validVariableChar(buffer)
+    local char = buffer:peekChar()
+    return isAlpha(char) or _valid_var_chars[char]
+end
+
+function Lexer:lexizeSingleToken(buffer)
+    self:skipWhiteSpace(buffer)
+    local char = buffer:peekChar()
+
+    if char == "[" or char == "\"" then
+        return self:parseString(buffer)
+    elseif char == "$" then
+        return self:parseAlias(buffer)
+    elseif char == "@" then
+        return self:parseMacro(buffer)
+    elseif char == "(" then
+        return self:parseCall(buffer)
+    elseif char == "=" then
+        return self:parseOperator(buffer)
+    elseif char == ";" or char == "\n" then
+        return self:parseSeperator(buffer)
+    elseif self:validVariableChar(buffer) then
+        return self:parseWord(buffer)
+    elseif isNumeric(char) then
+        return self:parseNumber(buffer)
+    elseif char == "/" and (buffer:peekChar(2) == "/" or buffer:peekChar(2) == "*") or char == "#" then
+        return self:parseComment(buffer)
+    elseif char then
+        return self:error("Unexpected character ", char, buffer)
+    else
+        return self:parseEndOfBuffer()
     end
-end)
+end
 
-env:setGlobalFunction("+", function(env, ...)
-    local args = {...}
-    local res = 0
-    
-    for i, value in pairs(args) do
-        res = res + (tonumber(value) or 0)
-    end
-    
-    return res
-end)
+function Lexer:lexize(buffer)
+    local tokens = {}
 
-env:setGlobalFunction("set", function(env, name, value)
-    if not name then
-        env:argError("Missing argument 1 for set.") 
+    while buffer:peekChar() do
+        table.insert(tokens, self:lexizeSingleToken(buffer))
     end
 
-    if not value then
-        env:argError("Missing argument 2 for set.") 
-    end
-    
-    p("SET", name, value)
-    env:setGlobal(name, value)
-end)
+    return tokens
+end
 
-env:setGlobalFunction("get", function(env, name)
-    if not name then
-       env:argError("Missing argument 1 for get.") 
-    end
+local LexerStack = core.Object:extend()
 
-    p("GET", name)
-    return env:getGlobal(name)
-end)
+function LexerStack:initialize(lex)
+    self.lex = lex
+    self.i = 0
+end
 
-env:setGlobalFunction("true", function(env, name)
-    return "1"
-end)
+function LexerStack:next()
+    self.i = self.i + 1
+    return self.lex[self.i]
+end
 
-env:setGlobalFunction("false", function(env, name)
-    return "0"
-end)
+function LexerStack:peek(amount)
+    amount = amount or 1
+    return self.lex[self.i + amount]
+end
 
-env:setGlobalFunction("echo", function(env, ...)
-    print(...)
-end)
+function LexerStack:backPeek(amount)
+    return self:peek(-amount)
+end
 
-env:setGlobalFunction("concatword", function(env, ...)
-    local args = {...}
-    local res = ""
-    
-    for i, arg in pairs(args) do
-       res = res .. arg 
-    end
-    
-    return res
-end)
+local Statement = core.Object:extend()
 
-env:setGlobalFunction("concat", function(env, ...)
-    local args = {...}
-    local res
-             
-    for i, arg in pairs(args) do
-        if res then
-            res = res .. " " .. arg 
+function Statement:initialize()
+    self.type = nil
+    self.arguments = {}
+end
+
+local statementType = {
+    assignment = "assignment",
+    call = "call"
+}
+
+local Parser = core.Object:extend()
+
+function Parser:initialize()
+
+end
+
+function Parser:skipComments(lex)
+    while lex:peek() do
+        local token = lex:peek()
+        if token.type == tokenType.comment or token.type == tokenType.seperator or token.type == tokenType.endOfBuffer then
+            lex:next()
         else
-            res = arg
+            break
         end
     end
-             
-    return res
-end)
-
-local function lexitize(file, callback)
-    fs.readFile(file, function (err, data)
-        env:run(data, callback)
-    end)
 end
 
-local function exec(file)
-    lexitize(file, function()
+function Parser:parseArguments(lex, statement)
+    while lex:peek() do
+        local token = lex:peek()
+        if token and token.type ~= tokenType.seperator and token.type ~= tokenType.endOfBuffer then
+            table.insert(statement.arguments, lex:next())
+        else
+            break
+        end
+    end
+end
+
+function Parser:parseOne(lex)
+    self:skipComments(lex)
+
+    local token = lex:next()
+
+    if not token then
+        return false
+    end
+
+    local statement = Statement:new()
+    statement.type = statementType.call
+    table.insert(statement.arguments, token)
+
+    if token.type == tokenType.word then
+        if lex:peek() and lex:peek().type == tokenType.operator then
+            local operator = lex:next()
+            if operator.value == "=" then
+                statement.type = statementType.assignment
+            end
+        end
+        self:parseArguments(lex, statement)
+    else
+        error("Unexpected type: "..token.type)
+    end
+    
+    return statement
+end
+
+function Parser:parse(lex)
+    local statements = {}
+    while lex:peek() do
+        local statement = self:parseOne(lex)
+        if statement then
+            table.insert(statements, statement)
+        end
+    end
+    return statements
+end
+
+local function makeScope(parent)
+    return setmetatable({}, {__index = parent})
+end
+
+
+local Environment = core.Object:extend()
+
+function Environment:initialize(scope)
+    self.lexer = nil
+    self.parser = nil
+    self.globalScope = scope or makeScope(nil)
+end
+
+function Environment:makeBuffer(string)
+    return Buffer:new(string)
+end
+
+function Environment:tokenize(buf)
+    p ":tokenize"
+    return self.lexer:lexize(buf)
+end
+
+function Environment:makeTokenStack(tokens)
+    return LexerStack:new(tokens)
+end
+
+function Environment:parse(stack)
+    return self.parser:parse(stack)
+end
+
+function Environment:executeCallback(callback, scope)
+    return self:run(callback, scope)
+end
+
+function Environment:run(code, scope)
+    if not core.instanceof(Buffer, code) then
+        code = self:makeBuffer(code)
+    end
+    
+    p "got buffer"
+
+    local tokens = self:tokenize(code)
+    
+    p "tokenizing"
+    
+    local statements = self:parse(self:makeTokenStack(tokens))
+    
+    p "running statements"
+    
+    return self:runStatements(statements, scope or self.globalScope)
+end
+
+function Environment:runMacros(tokens, scope)
+    local result = ""
+
+    for k, value in pairs(type(tokens) == "table" and tokens or {tokens}) do
+        if type(value) ~= "string" then
+            assert(value.type == tokenType.macro, "Value is not a macro")
+
+            -- @[ ]
+            if type(value.value) == "table" then
+                assert(value.value.type == tokenType.string, "Macro table is not string")
+                value = self:run(value.value.value[1], scope)
+
+            -- @n
+            elseif not scope[value.value] then
+                p(value.value)
+                error("Invalid value lookup: "..value.value)
+            else
+                value = scope[value.value]
+            end
+
+            p("Lookup", value)
+
+            result = result .. value --TODO better scope lookup 
+        else
+            result = result .. value
+        end
+    end
+    
+    p("after macro run", result)
+
+    return result
+end
+
+function Environment:runArgument(token, scope)
+    p(token.type)
+    if token.type == tokenType.string then
+        return self:runMacros(token.value, scope)
+    elseif token.type == tokenType.word then
+        return self:runMacros(token.value, scope)
+    elseif token.type == tokenType.number then
+        return token.value
+    elseif token.type == tokenType.alias then
+        local v = self:runMacros(token.value, scope)
+
+        if not scope[v] then
+            error("Unkown alias lookup: "..v)
+        end
+
+        return scope[v]
+    elseif token.type == tokenType.call then
+        p(token.value)
+        return self:run(token.value, scope)
+    elseif token.type == tokenType.macro then
+        p(token, token.value)
+        error "macro ?"
+    else
+        error("Unkown token type: "..token.type)
+    end
+end
+
+function Environment:runAllArguments(tokens, scope)
+    local result = {}
+
+    for k, v in pairs(tokens) do
+        result[k] = self:runArgument(v, scope)
+    end
+
+    return result
+end
+
+function Environment:runStatements(statements, scope)
+    for k, statement in pairs(statements) do
+        p("Running statement:", statement)
+        if not statement then
+        elseif statement.type == statementType.assignment then
+            p(statement.arguments)
+            assert(#statement.arguments == 2, "Too many arguments for assignment operator")
+
+            local var = self:runArgument(statement.arguments[1], scope)
+            local val = self:runArgument(statement.arguments[2], scope)
+
+            p(var, "=", val)
+            scope[var] = val
+            scope.result = val
+        elseif statement.type == statementType.call then
+            local func
+            local args = {}
+
+            for k, v in pairs(statement.arguments) do
+                if k == 1 then
+                    func = v
+                else
+                    args[k-1] = v
+                end
+            end
+
+            p("preargs")
+            func = self:runArgument(func, scope)
+            p("func")
+            args = self:runAllArguments(args, scope)
+            p("args")
+
+            if type(scope[func]) == "function" then
+                scope.result = scope[func](self, scope, unpack(args))
+            elseif type(scope[func]) == "string" then
+                local subScope = makeScope(scope)
+
+                for k, v in ipairs(args) do
+                    subScope["arg"..k] = v
+                end
+
+                scope.result = self:run(scope[func], subScope)
+            elseif type(scope[func]) == "number" or type(scope[func]) == "boolean" then
+                scope.result = scope[func]
+            else
+                p(statement, func)
+                error("Trying to call nonexisting function: "..func)
+            end
+        else
+            p(statement)
+            error("Unkown statement type")
+        end
+    end
+    
+    return scope.result
+end
+
+function Environment:register(name, cb, scope)
+    scope = scope or self.globalScope
+    scope[name] = cb
+end
+
+
+
+-- TEST:
+do
+    local fs = require "luvit.fs"
+    fs.readFile("test.cs", function(err, data)
+        if err then error(err) end
+        local env = Environment:new()
+        env.lexer = Lexer:new()
+        env.parser = Parser:new()
+
+        env.globalScope["true"] = true
         
+        env:register("echo", print)
+
+        env:register("+", function(env, scope, ...)
+            local value = 0
+
+            for k, v in pairs({...}) do
+                value = value + tonumber(v) --TODO: use the lexer number parser
+            end
+
+            return value
+        end)
+
+        env:register("<", function(env, scope, a, b)
+            return tonumber(a or 0) < tonumber(b or 0)
+        end)
+
+        env:register("if", function(env, scope, a, b, c)
+            if a then
+                return env:executeCallback(b)
+            else
+                return env:executeCallback(c)
+            end
+        end)
+
+        env:register("concat", function(env, scope, ...)
+            return table.concat({...}, " ")
+        end)
+
+        env:run(data)
+
+        p "done"
     end)
 end
-
-exec("test.cs")
-

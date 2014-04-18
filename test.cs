@@ -1,26 +1,18 @@
-a = "1"
-a = (+ $a "2")
-// A comment
-/*
-    A long comment
-    That is cool
-*/
+i = 5
 
-if (< $a 10) "echo [lol]" [ ]
+a = [
+    i = 1
+    b = [
+        echo $arg@[ + $i 1 ] @@i $i
+    ]
 
-if (true) [
-    echo "Hello world"
-    echo (concatword "Hello" "-" "World" "!")
-] [
-    echo "You won't see this"
+    i = 2
+
+    b "test" "This"
 ]
 
-if (< 0 -1) [
-    
-] [
-    echo "Hello world!"
-    echo (concat "Hello" "World" "Spaces!!")
-]
+a "Hello world"
 
-exec "test.cs"
+i = 2
 
+a "Again?"
