@@ -25,6 +25,36 @@ function string.split(str, pat)
     return t
 end
 
+local function isAlpha(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+local function isNumeric(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 48 and c <= 57)
+end
+
+local function isAlphaNumeric(char)
+    if not char then return end
+    local c = char:byte()
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+local function isLineSeperator(char)
+    if not char then return end
+    local c = char:byte()
+    return c == 10 or c == 13
+end
+
+local function isWhiteSpace(char)
+    if not char then return end
+    local c = char:byte()
+    return c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
+end
+
 local Buffer = core.Object:extend()
 
 function Buffer:initialize(string)
@@ -32,6 +62,7 @@ function Buffer:initialize(string)
         error("No string was given for argument #1")
     end
     self.i = 0
+    self.line = 1
     self.chars = string
 end
 
@@ -46,7 +77,11 @@ function Buffer:getChar()
        return nil
    end
 
-   return self.chars:sub(self.i, self.i)
+   local c = self.chars:sub(self.i, self.i)
+   if isLineSeperator(c) then
+       self.line = self.line + 1
+   end
+   return c
 end
 
 function Buffer:peekChar(peek)
@@ -83,36 +118,6 @@ function Token:initialize(tokenType)
     self.type = tokenType
 end
 
-local function isAlpha(char)
-    if not char then return end
-    local c = char:byte()
-    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
-end
-
-local function isNumeric(char)
-    if not char then return end
-    local c = char:byte()
-    return (c >= 48 and c <= 57)
-end
-
-local function isAlphaNumeric(char)
-    if not char then return end
-    local c = char:byte()
-    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
-end
-
-local function isLineSeperator(char)
-    if not char then return end
-    local c = char:byte()
-    return c == 10 or c == 13
-end
-
-local function isWhiteSpace(char)
-    if not char then return end
-    local c = char:byte()
-    return c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
-end
-
 local Lexer = core.Object:extend()
 
 function Lexer:initialize()
@@ -126,7 +131,6 @@ function Lexer:error(message, wrongChar, buffer)
 
     while not isLineSeperator(buffer:undoChar()) do 
         if not buffer:peekChar() then
-            p(buffer:getChar())
             break
         end
     end
@@ -386,11 +390,6 @@ function Lexer:parseMacro(buffer)
 
             char = buffer:peekChar()
         end
-
-        if not isWhiteSpace(char) then
-            char = buffer:getChar()
-            self:error("Expecting end of macro", char, buffer)
-        end
     end
 
     return token
@@ -428,6 +427,23 @@ function Lexer:parseCall(buffer)
     return token
 end
 
+Lexer.operators = {
+    ["="] = "=",
+}
+function Lexer:isOperator(buffer)
+    local i = 1
+    local char = buffer:peekChar(i)
+    local str = ""
+
+    while char and not isWhiteSpace(char) do
+        str = str .. char
+        i = i + 1
+        char = buffer:peekChar(i)
+    end
+
+    return self.operators[str]
+end
+
 function Lexer:parseOperator(buffer)
     local op = self:readUntilWhiteSpace(buffer)
     if op ~= "=" then
@@ -460,6 +476,9 @@ function Lexer:parseComment(buffer)
 
         while char and char ~= "\n" and char ~= "\r" do
             token.value = token.value .. char
+            if isLineSeperator(buffer:peekChar()) then
+                break
+            end
             char = buffer:getChar()
         end
     elseif char == "/" and buffer:peekChar() == "*" then
@@ -507,16 +526,16 @@ function Lexer:lexizeSingleToken(buffer)
         return self:parseMacro(buffer)
     elseif char == "(" then
         return self:parseCall(buffer)
-    elseif char == "=" then
-        return self:parseOperator(buffer)
-    elseif char == ";" or char == "\n" then
-        return self:parseSeperator(buffer)
-    elseif self:validVariableChar(buffer) then
-        return self:parseWord(buffer)
-    elseif isNumeric(char) then
-        return self:parseNumber(buffer)
     elseif char == "/" and (buffer:peekChar(2) == "/" or buffer:peekChar(2) == "*") or char == "#" then
         return self:parseComment(buffer)
+    elseif char == ";" or char == "\n" then
+        return self:parseSeperator(buffer)
+    elseif self:isOperator(buffer) then
+        return self:parseOperator(buffer)
+    elseif isNumeric(char) or char == "-" then
+        return self:parseNumber(buffer)
+    elseif self:validVariableChar(buffer) then
+        return self:parseWord(buffer)
     elseif char then
         return self:error("Unexpected character ", char, buffer)
     else
@@ -528,7 +547,10 @@ function Lexer:lexize(buffer)
     local tokens = {}
 
     while buffer:peekChar() do
-        table.insert(tokens, self:lexizeSingleToken(buffer))
+        local line = buffer.line
+        local token = self:lexizeSingleToken(buffer)
+        token.line = line
+        table.insert(tokens, token)
     end
 
     return tokens
@@ -588,7 +610,11 @@ function Parser:parseArguments(lex, statement)
     while lex:peek() do
         local token = lex:peek()
         if token and token.type ~= tokenType.seperator and token.type ~= tokenType.endOfBuffer then
-            table.insert(statement.arguments, lex:next())
+            if token.type ~= tokenType.comment then
+                table.insert(statement.arguments, lex:next())
+            else
+                lex:next()
+            end
         else
             break
         end
@@ -606,6 +632,7 @@ function Parser:parseOne(lex)
 
     local statement = Statement:new()
     statement.type = statementType.call
+    statement.line = token.line
     table.insert(statement.arguments, token)
 
     if token.type == tokenType.word then
@@ -634,10 +661,57 @@ function Parser:parse(lex)
     return statements
 end
 
-local function makeScope(parent)
-    return setmetatable({}, {__index = parent})
+local Trace = core.Object:extend()
+
+function Trace:initialize()
+    self.i = 1
+    self.trace = {}
 end
 
+function Trace:add(obj)
+    self.trace[self.i] = obj
+    self.i = self.i + 1
+end
+
+function Trace:pop()
+    self.i = self.i - 1
+    return self.trace[self.i]
+end
+
+local metaScope = {}
+function metaScope:__index(key)
+    if key:sub(1, 1) == "#" then return end
+    local v = rawget(self, key)
+    local parent = rawget(self, "#parent")
+    if type(v) == "nil" and parent then
+        return parent[key]
+    else
+        return v
+    end
+end
+
+function metaScope:__newindex(key, value)
+    if key:sub(1, 1) == "#" then return end
+    local haveLocal = rawget(self, key)
+    local isNil = type(value) == "nil"
+    local parent = rawget(self, "#parent")
+    local preferlocal = rawget(self, "preferlocal")
+    if haveLocal or preferlocal then
+        if isNil then
+            rawset(self, key, "") -- Keep locals
+        else
+            rawset(self, key, value)
+        end
+    elseif parent then
+        parent[key] = value
+    else
+        rawset(self, key, value)
+    end
+end
+
+local function makeScope(parent, preferlocal)
+    return setmetatable({["#parent"] = parent, ["#preferlocal"] = preferlocal}, metaScope)
+end
 
 local Environment = core.Object:extend()
 
@@ -647,12 +721,56 @@ function Environment:initialize(scope)
     self.globalScope = scope or makeScope(nil)
 end
 
+function Environment:createTokenLocationTrace(token)
+    return "<unkown file>:"..tostring(token.line)
+end
+
+function Environment:createTraceMessage(msg)
+    if type(msg) == "string" then
+        return msg
+    elseif type(msg) == "table" then
+        if msg.argument then
+            return self:createTokenLocationTrace(msg.argument).." in argument preprocessing"
+        elseif msg.macro then
+            return self:createTokenLocationTrace(msg.macro).." in macro preprocessing"
+        elseif msg.statement then
+            if msg.type == "assignment" then
+                return self:createTokenLocationTrace(msg.statement).." in assginment "..tostring(msg.name)
+            else
+                return self:createTokenLocationTrace(msg.statement).." in function "..tostring(msg.name)
+            end
+        else
+            local str = ""
+            for k, v in pairs(msg) do
+                str = str .. tostring(k) .. "=" .. tostring(v).. ", "
+            end
+            return str
+        end
+    else
+        return "Weird trace msg of type "..type(msg)
+    end
+end
+
+function Environment:throwError(message, trace)
+    local err = setmetatable({}, errorMeta)
+    err.message = message
+    local back = {}
+
+    local traceMessage = trace:pop()
+    while traceMessage do
+        table.insert(back, self:createTraceMessage(traceMessage))
+        traceMessage = trace:pop()
+    end
+    err.trace = back
+    err.message = err.message .."\n\t"..table.concat(back, "\n\t")
+    error(err)
+end
+
 function Environment:makeBuffer(string)
     return Buffer:new(string)
 end
 
 function Environment:tokenize(buf)
-    p ":tokenize"
     return self.lexer:lexize(buf)
 end
 
@@ -668,27 +786,28 @@ function Environment:executeCallback(callback, scope)
     return self:run(callback, scope)
 end
 
-function Environment:run(code, scope)
+function Environment:run(code, scope, trace)
     if not core.instanceof(Buffer, code) then
         code = self:makeBuffer(code)
     end
-    
-    p "got buffer"
 
     local tokens = self:tokenize(code)
-    
-    p "tokenizing"
-    
     local statements = self:parse(self:makeTokenStack(tokens))
-    
-    p "running statements"
-    
-    return self:runStatements(statements, scope or self.globalScope)
+
+    if not trace then
+        trace = Trace:new()
+        trace:add("Environment:run(<code>)")
+    end
+
+    return self:runStatements(statements, scope or self.globalScope, trace)
 end
 
-function Environment:runMacros(tokens, scope)
+function Environment:runMacros(parent, scope, trace)
     local result = ""
 
+    trace:add({macro = parent})
+
+    local tokens = parent.value
     for k, value in pairs(type(tokens) == "table" and tokens or {tokens}) do
         if type(value) ~= "string" then
             assert(value.type == tokenType.macro, "Value is not a macro")
@@ -700,75 +819,82 @@ function Environment:runMacros(tokens, scope)
 
             -- @n
             elseif not scope[value.value] then
-                p(value.value)
-                error("Invalid value lookup: "..value.value)
+                self:throwError("Invalid value lookup: "..value.value, trace)
             else
                 value = scope[value.value]
             end
-
-            p("Lookup", value)
 
             result = result .. value --TODO better scope lookup 
         else
             result = result .. value
         end
     end
-    
-    p("after macro run", result)
+
+    trace:pop()
 
     return result
 end
 
-function Environment:runArgument(token, scope)
-    p(token.type)
+function Environment:runArgument(token, scope, trace)
+    trace:add({argument = token})
+
+    local r
     if token.type == tokenType.string then
-        return self:runMacros(token.value, scope)
+        r = self:runMacros(token, scope, trace)
     elseif token.type == tokenType.word then
-        return self:runMacros(token.value, scope)
+        r = self:runMacros(token, scope, trace)
     elseif token.type == tokenType.number then
-        return token.value
+        r = token.value
     elseif token.type == tokenType.alias then
-        local v = self:runMacros(token.value, scope)
+        local v = self:runMacros(token, scope, trace)
 
         if not scope[v] then
-            error("Unkown alias lookup: "..v)
+            self:throwError("Unkown alias lookup: "..v, trace)
         end
 
-        return scope[v]
+        r = scope[v]
     elseif token.type == tokenType.call then
-        p(token.value)
-        return self:run(token.value, scope)
+        r = self:run(token.value, scope, trace)
     elseif token.type == tokenType.macro then
-        p(token, token.value)
         error "macro ?"
     else
         error("Unkown token type: "..token.type)
     end
+
+    trace:pop()
+    return r
 end
 
-function Environment:runAllArguments(tokens, scope)
+function Environment:runAllArguments(tokens, scope, trace)
     local result = {}
 
     for k, v in pairs(tokens) do
-        result[k] = self:runArgument(v, scope)
+        result[k] = self:runArgument(v, scope, trace)
     end
 
     return result
 end
 
-function Environment:runStatements(statements, scope)
+function Environment:runStatements(statements, scope, trace)
     for k, statement in pairs(statements) do
-        p("Running statement:", statement)
         if not statement then
         elseif statement.type == statementType.assignment then
-            p(statement.arguments)
             assert(#statement.arguments == 2, "Too many arguments for assignment operator")
 
-            local var = self:runArgument(statement.arguments[1], scope)
-            local val = self:runArgument(statement.arguments[2], scope)
+            trace:add({statement = statement, type="assignment", name = statement.arguments[1]})
+                local var = self:runArgument(statement.arguments[1], scope, trace)
+            trace:pop()
+            trace:add({statement = statement, type="run.args", name = var})
+                local val = self:runArgument(statement.arguments[2], scope, trace)
+            trace:pop()
 
-            p(var, "=", val)
-            scope[var] = val
+            if type(scope[var]) == "function" then
+                self:throwError("Cannot overwrite function type: "..var, trace)
+            end
+
+            trace:add({statement = statement, type="assignment", name = var})
+                scope[var] = val
+            trace:pop()
             scope.result = val
         elseif statement.type == statementType.call then
             local func
@@ -782,30 +908,31 @@ function Environment:runStatements(statements, scope)
                 end
             end
 
-            p("preargs")
-            func = self:runArgument(func, scope)
-            p("func")
-            args = self:runAllArguments(args, scope)
-            p("args")
+            trace:add({statement = statement, type = "run.args"})
+                func = self:runArgument(func, scope, trace)
+                args = self:runAllArguments(args, scope, trace)
+            trace:pop()
 
-            if type(scope[func]) == "function" then
-                scope.result = scope[func](self, scope, unpack(args))
-            elseif type(scope[func]) == "string" then
-                local subScope = makeScope(scope)
+            trace:add({statement = statement, type = "run", name = func})
+                local f = scope[func]
+                if type(f) == "function" then
+                    scope.result = f(self, scope, unpack(args))
+                elseif type(f) == "string" then
+                    local subScope = makeScope(scope)
 
-                for k, v in ipairs(args) do
-                    subScope["arg"..k] = v
+                    for k, v in ipairs(args) do
+                        rawset(subScope, "arg"..k, v) --Locals
+                    end
+
+                    scope.result = self:run(f, subScope, trace)
+                elseif type(f) == "number" or type(f) == "boolean" then
+                    scope.result = f
+                else
+                    p("CALL", func, args)
+                    self:throwError("Trying to call nonexisting function: "..func, trace)
                 end
-
-                scope.result = self:run(scope[func], subScope)
-            elseif type(scope[func]) == "number" or type(scope[func]) == "boolean" then
-                scope.result = scope[func]
-            else
-                p(statement, func)
-                error("Trying to call nonexisting function: "..func)
-            end
+            trace:pop()
         else
-            p(statement)
             error("Unkown statement type")
         end
     end
@@ -819,48 +946,15 @@ function Environment:register(name, cb, scope)
 end
 
 
-
--- TEST:
-do
-    local fs = require "luvit.fs"
-    fs.readFile("test.cs", function(err, data)
-        if err then error(err) end
+return {
+    Environment = Environment,
+    Lexer = Lexer,
+    Parser = Parser,
+    createEnvironment = function()
         local env = Environment:new()
         env.lexer = Lexer:new()
         env.parser = Parser:new()
-
-        env.globalScope["true"] = true
-        
-        env:register("echo", print)
-
-        env:register("+", function(env, scope, ...)
-            local value = 0
-
-            for k, v in pairs({...}) do
-                value = value + tonumber(v) --TODO: use the lexer number parser
-            end
-
-            return value
-        end)
-
-        env:register("<", function(env, scope, a, b)
-            return tonumber(a or 0) < tonumber(b or 0)
-        end)
-
-        env:register("if", function(env, scope, a, b, c)
-            if a then
-                return env:executeCallback(b)
-            else
-                return env:executeCallback(c)
-            end
-        end)
-
-        env:register("concat", function(env, scope, ...)
-            return table.concat({...}, " ")
-        end)
-
-        env:run(data)
-
-        p "done"
-    end)
-end
+        return env
+    end,
+    makeScope = makeScope
+}
