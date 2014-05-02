@@ -721,24 +721,36 @@ function Environment:initialize(scope)
     self.globalScope = scope or makeScope(nil)
 end
 
-function Environment:createTokenLocationTrace(token)
-    return "<unkown file>:"..tostring(token.line)
+function Environment:createTokenLocationTrace(token, shift)
+    local line = token.line
+    if shift.line > 0 then
+        line = line + shift.line - 1
+    end
+    return shift.file..":"..tostring(line)
 end
 
-function Environment:createTraceMessage(msg)
+function Environment:createTraceMessage(msg, shift)
     if type(msg) == "string" then
         return msg
     elseif type(msg) == "table" then
         if msg.argument then
-            return self:createTokenLocationTrace(msg.argument).." in argument preprocessing"
+            return self:createTokenLocationTrace(msg.argument, shift).." in argument preprocessing"
         elseif msg.macro then
-            return self:createTokenLocationTrace(msg.macro).." in macro preprocessing"
+            return self:createTokenLocationTrace(msg.macro, shift).." in macro preprocessing"
         elseif msg.statement then
             if msg.type == "assignment" then
-                return self:createTokenLocationTrace(msg.statement).." in assginment "..tostring(msg.name)
+                return self:createTokenLocationTrace(msg.statement, shift).." in assginment "..tostring(msg.name)
             else
-                return self:createTokenLocationTrace(msg.statement).." in function "..tostring(msg.name)
+                return self:createTokenLocationTrace(msg.statement, shift).." in function "..tostring(msg.name)
             end
+        elseif msg.fileShift or type(msg.lineShift) == "number" then
+            if type(msg.lineShift) == "number" then
+                shift.line = msg.lineShift
+            end
+            if msg.fileShift then
+                shift.file = msg.fileShift
+            end
+            return shift
         else
             local str = ""
             for k, v in pairs(msg) do
@@ -756,9 +768,28 @@ function Environment:throwError(message, trace)
     err.message = message
     local back = {}
 
+    local shift = {file = "<unkown file>", line = 0}
     local traceMessage = trace:pop()
     while traceMessage do
-        table.insert(back, self:createTraceMessage(traceMessage))
+        for k, msg in pairs(trace.trace) do
+            if msg.fileShift or type(msg.lineShift) == "number" then
+                if type(msg.lineShift) == "number" then
+                    shift.line = msg.lineShift
+                end
+                if msg.fileShift then
+                    shift.file = msg.fileShift
+                end
+            end
+            if traceMessage == msg then
+                break
+            end
+        end
+        local v = self:createTraceMessage(traceMessage, shift)
+        if type(v) == "table" then
+            shift = v
+        else
+            table.insert(back, v)
+        end
         traceMessage = trace:pop()
     end
     err.trace = back
@@ -786,8 +817,12 @@ function Environment:executeCallback(callback, scope)
     return self:run(callback, scope)
 end
 
-function Environment:run(code, scope, trace)
+function Environment:run(code, scope, trace, meta)
     if not core.instanceof(Buffer, code) then
+        if type(code) == "table" then
+            meta = meta or {fileShift = code.file, lineShift = code.line}
+            code = code.value
+        end
         code = self:makeBuffer(code)
     end
 
@@ -796,10 +831,22 @@ function Environment:run(code, scope, trace)
 
     if not trace then
         trace = Trace:new()
+        if meta then
+            trace:add(meta)
+        end
         trace:add("Environment:run(<code>)")
+    else
+        if meta then
+            trace:add(meta)
+        end
     end
 
-    return self:runStatements(statements, scope or self.globalScope, trace)
+    local ret = self:runStatements(statements, scope or self.globalScope, trace)
+    if meta then
+        trace:pop()
+    end
+
+    return ret
 end
 
 function Environment:runMacros(parent, scope, trace)
@@ -893,7 +940,7 @@ function Environment:runStatements(statements, scope, trace)
             end
 
             trace:add({statement = statement, type="assignment", name = var})
-                scope[var] = val
+                scope[var] = {value=val, line=statement.line, file=statement.file}
             trace:pop()
             scope.result = val
         elseif statement.type == statementType.call then
@@ -917,7 +964,7 @@ function Environment:runStatements(statements, scope, trace)
                 local f = scope[func]
                 if type(f) == "function" then
                     scope.result = f(self, scope, unpack(args))
-                elseif type(f) == "string" then
+                elseif type(f) == "string" or type(f) == "table" then
                     local subScope = makeScope(scope)
 
                     for k, v in ipairs(args) do
