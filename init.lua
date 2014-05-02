@@ -507,7 +507,8 @@ local _valid_var_chars = {
     ["*"] = true,
     ["="] = true,
     ["<"] = true,
-    [">"] = true
+    [">"] = true,
+    ["_"] = true,
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
@@ -635,7 +636,7 @@ function Parser:parseOne(lex)
     statement.line = token.line
     table.insert(statement.arguments, token)
 
-    if token.type == tokenType.word then
+    if token.type == tokenType.word or token.type == tokenType.string then
         if lex:peek() and lex:peek().type == tokenType.operator then
             local operator = lex:next()
             if operator.value == "=" then
@@ -740,10 +741,12 @@ function Environment:createTraceMessage(msg, shift)
         elseif msg.statement then
             if msg.type == "assignment" then
                 return self:createTokenLocationTrace(msg.statement, shift).." in assginment "..tostring(msg.name)
+            elseif msg.type == "run.args" then
+                return self:createTokenLocationTrace(msg.statement, shift).." in argument calling."
             else
-                return self:createTokenLocationTrace(msg.statement, shift).." in function "..tostring(msg.name)
+                return self:createTokenLocationTrace(msg.statement, shift).." in call to function "..tostring(msg.name)
             end
-        elseif msg.fileShift or type(msg.lineShift) == "number" then
+        elseif msg.fileShift or type(msg.lineShift) == "number" or type(msg.relativelineShift) == "number" then
             if type(msg.lineShift) == "number" then
                 shift.line = msg.lineShift
             end
@@ -751,6 +754,10 @@ function Environment:createTraceMessage(msg, shift)
                 shift.file = msg.fileShift
             end
             return shift
+        elseif msg.callbackFunction then
+            return self:createTokenLocationTrace({line = 1}, shift).. " in callback function"
+        elseif msg.globalScope then
+            return self:createTokenLocationTrace({line = 1}, shift).. " in global scope"
         else
             local str = ""
             for k, v in pairs(msg) do
@@ -772,12 +779,15 @@ function Environment:throwError(message, trace)
     local traceMessage = trace:pop()
     while traceMessage do
         for k, msg in pairs(trace.trace) do
-            if msg.fileShift or type(msg.lineShift) == "number" then
+            if msg.fileShift or type(msg.lineShift) == "number" or type(msg.relativelineShift) == "number" then
                 if type(msg.lineShift) == "number" then
                     shift.line = msg.lineShift
                 end
                 if msg.fileShift then
                     shift.file = msg.fileShift
+                end
+                if msg.relativelineShift then
+                    shift.line = shift.line + msg.relativelineShift - 1
                 end
             end
             if traceMessage == msg then
@@ -813,8 +823,16 @@ function Environment:parse(stack)
     return self.parser:parse(stack)
 end
 
-function Environment:executeCallback(callback, scope)
-    return self:run(callback, scope)
+function Environment:executeCallback(callback, scope, trace)
+    local x = trace:pop()
+    trace:add(x)
+    trace:add({relativelineShift = x.statement.line + 1})
+    trace:add({callbackFunction = true})
+        local ret = self:run(callback, scope, trace)
+    trace:pop()
+    trace:pop()
+
+    return ret
 end
 
 function Environment:run(code, scope, trace, meta)
@@ -834,7 +852,7 @@ function Environment:run(code, scope, trace, meta)
         if meta then
             trace:add(meta)
         end
-        trace:add("Environment:run(<code>)")
+        trace:add({globalScope = true})
     else
         if meta then
             trace:add(meta)
@@ -884,6 +902,7 @@ end
 
 function Environment:runArgument(token, scope, trace)
     trace:add({argument = token})
+    trace:add({relativelineShift = token.line})
 
     local r
     if token.type == tokenType.string then
@@ -903,11 +922,12 @@ function Environment:runArgument(token, scope, trace)
     elseif token.type == tokenType.call then
         r = self:run(token.value, scope, trace)
     elseif token.type == tokenType.macro then
-        error "macro ?"
+        error "Macro argument not preprocessed"
     else
         error("Unkown token type: "..token.type)
     end
 
+    trace:pop()
     trace:pop()
     return r
 end
@@ -963,7 +983,7 @@ function Environment:runStatements(statements, scope, trace)
             trace:add({statement = statement, type = "run", name = func})
                 local f = scope[func]
                 if type(f) == "function" then
-                    scope.result = f(self, scope, unpack(args))
+                    scope.result = f(self, scope, trace, unpack(args))
                 elseif type(f) == "string" or type(f) == "table" then
                     local subScope = makeScope(scope)
 
@@ -975,7 +995,6 @@ function Environment:runStatements(statements, scope, trace)
                 elseif type(f) == "number" or type(f) == "boolean" then
                     scope.result = f
                 else
-                    p("CALL", func, args)
                     self:throwError("Trying to call nonexisting function: "..func, trace)
                 end
             trace:pop()
