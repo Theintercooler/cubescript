@@ -676,7 +676,9 @@ end
 
 function Trace:pop()
     self.i = self.i - 1
-    return self.trace[self.i]
+    local ret = self.trace[self.i]
+    self.trace[self.i] = nil
+    return ret
 end
 
 local metaScope = {}
