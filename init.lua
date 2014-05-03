@@ -1,6 +1,8 @@
+local math = require "math"
 local string = require "string"
 local table = require "table"
 local core = require "luvit.core"
+local traceback = require "debug".traceback
 
 local utils = require "luvit.utils"
 utils.DUMP_MAX_DEPTH = 100
@@ -57,13 +59,14 @@ end
 
 local Buffer = core.Object:extend()
 
-function Buffer:initialize(string)
+function Buffer:initialize(string, startLine, fileInfo)
     if type(string) ~= "string" then
         error("No string was given for argument #1")
     end
     self.i = 0
-    self.line = 1
+    self.line = startLine or 1
     self.chars = string
+    self.file = fileInfo
 end
 
 function Buffer:skipChar()
@@ -78,7 +81,7 @@ function Buffer:getChar()
    end
 
    local c = self.chars:sub(self.i, self.i)
-   if isLineSeperator(c) then
+   if isLineSeperator(c) and (c ~= '\r' or self:peek() ~= '\n') then
        self.line = self.line + 1
    end
    return c
@@ -126,6 +129,8 @@ end
 
 function Lexer:error(message, wrongChar, buffer)
     local location = buffer.i
+    local fileLocation = buffer.file or "<unkown file>"
+    local lineLocation = buffer.line or 0
 
     local line = ""
 
@@ -151,7 +156,7 @@ function Lexer:error(message, wrongChar, buffer)
         if isLineSeperator(wrongChar) then
             char = "<eol>"
         end
-        message = message .." got: "..tostring(wrongChar)
+        message = fileLocation .. ":" .. lineLocation .. " " .. message .." got: "..tostring(wrongChar)
     end
     message = message .. "\n"..line .. "\n" .. arrow
     error (message)
@@ -204,9 +209,11 @@ function Lexer:parseString(buffer)
         while char do
             if char == "@" then
                 local oldI = buffer.i
+                local oldLine = buffer.line
                 char = self:parseMacro(buffer)
                 if char.stack < stack then
                     buffer.i = oldI
+                    buffer.line = oldLine
                     char = buffer:getChar()
                 end
             else
@@ -293,6 +300,17 @@ function Lexer:parseWord(buffer)
     return token
 end
 
+function Lexer:isNumber(buffer)
+    local char = buffer:peekChar()
+    if isNumeric(char) then
+        return true
+    elseif char == "-"  then
+        return isNumeric(buffer:peekChar(2))
+    else
+        return false
+    end
+end
+
 function Lexer:parseNumber(buffer)
     local token = Token:new(tokenType.number)
     local char = buffer:getChar()
@@ -319,6 +337,7 @@ function Lexer:parseNumber(buffer)
     elseif numberType == "b" then
         base = 2
     end
+    local finalShift = 0
     local noPeek = false
     while char and not isWhiteSpace(char) do
         if noPeek then
@@ -344,18 +363,35 @@ function Lexer:parseNumber(buffer)
             ["f"] = 15
         })[char:lower()]
 
-        if type(value) == "nil" then
+        if char == "." then
+            finalShift = 1
+        elseif type(value) == "nil" then
             self:error("Invalid number", char, buffer)
         end
 
-        token.value = token.value * base + value
+        if finalShift > 0 then
+            finalShift = finalShift + 1
+        end
+
+        if value then
+            token.value = token.value * base + value
+        end
 
         char = buffer:peekChar()
         noPeek = true
     end
 
+    if not noPeek then
+        self:error("Invalid number", char, buffer)
+    end
+    
+
     if negative then
         token.value = -token.value
+    end
+
+    if finalShift > 0 then
+        token.value = token.value / (math.pow(base, finalShift-2))
     end
 
     return token
@@ -379,6 +415,8 @@ function Lexer:parseMacro(buffer)
 
     if char == "[" then
         token.value = self:parseString(buffer)
+    elseif char == "(" then
+        token.value = self:parseCall(buffer)
     else
         token.value = ""
         char = buffer:peekChar()
@@ -467,7 +505,7 @@ function Lexer:parseComment(buffer)
     local token = Token:new(tokenType.comment)
     token.value = ""
 
-    if char == "#" or char == "/" and buffer:peekChar() == "/" then 
+    if --[[char == "#" or]] char == "/" and buffer:peekChar() == "/" then 
         if char == "/" then
             buffer:getChar() -- skip the second slash
         end
@@ -509,6 +547,10 @@ local _valid_var_chars = {
     ["<"] = true,
     [">"] = true,
     ["_"] = true,
+    ["?"] = true,
+    ["|"] = true,
+    ["&"] = true,
+    ["!"] = true
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
@@ -533,12 +575,12 @@ function Lexer:lexizeSingleToken(buffer)
         return self:parseSeperator(buffer)
     elseif self:isOperator(buffer) then
         return self:parseOperator(buffer)
-    elseif isNumeric(char) or char == "-" then
+    elseif self:isNumber(buffer) then
         return self:parseNumber(buffer)
     elseif self:validVariableChar(buffer) then
         return self:parseWord(buffer)
     elseif char then
-        return self:error("Unexpected character ", char, buffer)
+        return self:error("Unexpected character", char, buffer)
     else
         return self:parseEndOfBuffer()
     end
@@ -551,6 +593,7 @@ function Lexer:lexize(buffer)
         local line = buffer.line
         local token = self:lexizeSingleToken(buffer)
         token.line = line
+        token.file = buffer.file
         table.insert(tokens, token)
     end
 
@@ -634,9 +677,13 @@ function Parser:parseOne(lex)
     local statement = Statement:new()
     statement.type = statementType.call
     statement.line = token.line
+    statement.file = token.file
     table.insert(statement.arguments, token)
 
-    if token.type == tokenType.word or token.type == tokenType.string then
+    if token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator then -- (= ....)
+        if token.type == tokenType.operator then
+            token.type = tokenType.word --Convert
+        end
         if lex:peek() and lex:peek().type == tokenType.operator then
             local operator = lex:next()
             if operator.value == "=" then
@@ -645,9 +692,10 @@ function Parser:parseOne(lex)
         end
         self:parseArguments(lex, statement)
     else
+        p(lex)
         error("Unexpected type: "..token.type)
     end
-    
+
     return statement
 end
 
@@ -724,42 +772,30 @@ function Environment:initialize(scope)
     self.globalScope = scope or makeScope(nil)
 end
 
-function Environment:createTokenLocationTrace(token, shift)
-    local line = token.line
-    if shift.line > 0 then
-        line = line + shift.line - 1
-    end
-    return shift.file..":"..tostring(line)
+function Environment:createTokenLocationTrace(token)
+    return tostring(token.file)..":"..tostring(token.line)
 end
 
-function Environment:createTraceMessage(msg, shift)
+function Environment:createTraceMessage(msg)
     if type(msg) == "string" then
         return msg
     elseif type(msg) == "table" then
         if msg.argument then
-            return self:createTokenLocationTrace(msg.argument, shift).." in argument preprocessing"
+            return self:createTokenLocationTrace(msg.argument).." in argument preprocessing"
         elseif msg.macro then
-            return self:createTokenLocationTrace(msg.macro, shift).." in macro preprocessing"
+            return self:createTokenLocationTrace(msg.macro).." in macro preprocessing"
         elseif msg.statement then
             if msg.type == "assignment" then
-                return self:createTokenLocationTrace(msg.statement, shift).." in assginment "..tostring(msg.name)
+                return self:createTokenLocationTrace(msg.statement).." in assginment "..tostring(msg.name)
             elseif msg.type == "run.args" then
-                return self:createTokenLocationTrace(msg.statement, shift).." in argument calling."
+                return self:createTokenLocationTrace(msg.statement).." in argument calling."
             else
-                return self:createTokenLocationTrace(msg.statement, shift).." in call to function "..tostring(msg.name)
+                return self:createTokenLocationTrace(msg.statement).." in call to function "..tostring(msg.name)
             end
-        elseif msg.fileShift or type(msg.lineShift) == "number" or type(msg.relativelineShift) == "number" then
-            if type(msg.lineShift) == "number" then
-                shift.line = msg.lineShift
-            end
-            if msg.fileShift then
-                shift.file = msg.fileShift
-            end
-            return shift
         elseif msg.callbackFunction then
-            return self:createTokenLocationTrace({line = 1}, shift).. " in callback function"
+            return self:createTokenLocationTrace(msg).. " in callback function"
         elseif msg.globalScope then
-            return self:createTokenLocationTrace({line = 1}, shift).. " in global scope"
+            return self:createTokenLocationTrace(msg).. " in global scope"
         else
             local str = ""
             for k, v in pairs(msg) do
@@ -777,26 +813,9 @@ function Environment:throwError(message, trace)
     err.message = message
     local back = {}
 
-    local shift = {file = "<unkown file>", line = 0}
     local traceMessage = trace:pop()
     while traceMessage do
-        for k, msg in pairs(trace.trace) do
-            if msg.fileShift or type(msg.lineShift) == "number" or type(msg.relativelineShift) == "number" then
-                if type(msg.lineShift) == "number" then
-                    shift.line = msg.lineShift
-                end
-                if msg.fileShift then
-                    shift.file = msg.fileShift
-                end
-                if msg.relativelineShift then
-                    shift.line = shift.line + msg.relativelineShift - 1
-                end
-            end
-            if traceMessage == msg then
-                break
-            end
-        end
-        local v = self:createTraceMessage(traceMessage, shift)
+        local v = self:createTraceMessage(traceMessage)
         if type(v) == "table" then
             shift = v
         else
@@ -809,8 +828,8 @@ function Environment:throwError(message, trace)
     error(err)
 end
 
-function Environment:makeBuffer(string)
-    return Buffer:new(string)
+function Environment:makeBuffer(string, startLine, fileInfo)
+    return Buffer:new(string, startLine, fileInfo)
 end
 
 function Environment:tokenize(buf)
@@ -825,12 +844,12 @@ function Environment:parse(stack)
     return self.parser:parse(stack)
 end
 
-function Environment:executeCallback(callback, scope, trace)
+function Environment:executeCallback(callback, scope, trace, meta)
     local x = trace:pop()
     trace:add(x)
     trace:add({relativelineShift = x.statement.line + 1})
     trace:add({callbackFunction = true})
-        local ret = self:run(callback, scope, trace)
+        local ret = self:run(callback, scope, trace, meta or trace.meta)
     trace:pop()
     trace:pop()
 
@@ -843,7 +862,7 @@ function Environment:run(code, scope, trace, meta)
             meta = meta or {fileShift = code.file, lineShift = code.line}
             code = code.value
         end
-        code = self:makeBuffer(code)
+        code = self:makeBuffer(code, meta.lineShift, meta.fileShift)
     end
 
     local tokens = self:tokenize(code)
@@ -851,22 +870,32 @@ function Environment:run(code, scope, trace, meta)
 
     if not trace then
         trace = Trace:new()
-        if meta then
-            trace:add(meta)
-        end
-        trace:add({globalScope = true})
-    else
-        if meta then
-            trace:add(meta)
-        end
+        trace:add({globalScope = true, file = meta.fileShift, line = meta.lineShift})
     end
 
     local ret = self:runStatements(statements, scope or self.globalScope, trace)
-    if meta then
-        trace:pop()
-    end
 
     return ret
+end
+
+function Environment:lookup(value, scope, trace)
+    local r
+    if not scope[value] then
+        self:throwError("Unkown alias lookup: "..value, trace)
+    elseif type(scope[value]) == "function" then --TODO: seperate getter/setter table function
+        local res, err = xpcall(function()
+            r = scope[value](self, scope, trace)
+        end, traceback)
+
+        if not res then
+            self:throwError(tostring(err).."\ncaused by alias lookup (native getter): "..v, trace)
+        end
+    elseif type(scope[value]) == "table" and type(scope[value].line) == "number" then
+        r = scope[value].value
+    else
+        r = scope[value]
+    end
+    return r
 end
 
 function Environment:runMacros(parent, scope, trace)
@@ -879,16 +908,28 @@ function Environment:runMacros(parent, scope, trace)
         if type(value) ~= "string" then
             assert(value.type == tokenType.macro, "Value is not a macro")
 
-            -- @[ ]
+            -- @[ ] or @( )
             if type(value.value) == "table" then
-                assert(value.value.type == tokenType.string, "Macro table is not string")
-                value = self:run(value.value.value[1], scope)
+                assert(value.value.type == tokenType.string or value.value.type == tokenType.call, "Macro table is not string or call")
+                if value.value.type == tokenType.string then
+                    --Lookup
+                    --TODO: more error checking
+                    local v = self:runMacros(value.value, scope, trace)
+                    value = self:lookup(v, scope, trace)
+                else
+                    if type(value.value.value) == "string" then
+                        value = self:run(value.value.value, scope, trace, {lineShift = parent.line, fileShift = parent.file})
+                    else
+                        --TODO: run everything
+                        p(value)
+                        assert(false)
+                        value = self:run(value.value.value[1], scope)
+                    end
+                end
 
             -- @n
-            elseif not scope[value.value] then
-                self:throwError("Invalid value lookup: "..value.value, trace)
             else
-                value = scope[value.value]
+                value = self:lookup(value.value, scope, trace)
             end
 
             result = result .. value --TODO better scope lookup 
@@ -904,7 +945,6 @@ end
 
 function Environment:runArgument(token, scope, trace)
     trace:add({argument = token})
-    trace:add({relativelineShift = token.line})
 
     local r
     if token.type == tokenType.string then
@@ -915,21 +955,15 @@ function Environment:runArgument(token, scope, trace)
         r = token.value
     elseif token.type == tokenType.alias then
         local v = self:runMacros(token, scope, trace)
-
-        if not scope[v] then
-            self:throwError("Unkown alias lookup: "..v, trace)
-        end
-
-        r = scope[v]
+        r = self:lookup(v, scope, trace)
     elseif token.type == tokenType.call then
-        r = self:run(token.value, scope, trace)
+        r = self:run(token.value, scope, trace, {fileShift = token.file, lineShift = token.line})
     elseif token.type == tokenType.macro then
         error "Macro argument not preprocessed"
     else
         error("Unkown token type: "..token.type)
     end
 
-    trace:pop()
     trace:pop()
     return r
 end
@@ -964,7 +998,7 @@ function Environment:runStatements(statements, scope, trace)
             trace:add({statement = statement, type="assignment", name = var})
                 scope[var] = {value=val, line=statement.line, file=statement.file}
             trace:pop()
-            scope.result = val
+            scope.__result__ = val
         elseif statement.type == statementType.call then
             local func
             local args = {}
@@ -977,25 +1011,57 @@ function Environment:runStatements(statements, scope, trace)
                 end
             end
 
+            local file = func.file
+            local line = func.line
+
             trace:add({statement = statement, type = "run.args"})
                 func = self:runArgument(func, scope, trace)
                 args = self:runAllArguments(args, scope, trace)
             trace:pop()
 
+            local argumentLocations = {}
+
+            for k, v in ipairs(args) do
+                if type(v) == "table" and v.line then
+                    argumentLocations[k] = {file = v.file, line = v.line}
+                    args[k] = v.value
+                end
+            end
+
             trace:add({statement = statement, type = "run", name = func})
                 local f = scope[func]
                 if type(f) == "function" then
-                    scope.result = f(self, scope, trace, unpack(args))
+                    local oldMeta = trace.meta
+                    trace.meta = {fileShift = file, lineShift = line}
+                    local res, err = xpcall(function()
+                        scope.__result__ = f(self, scope, trace, unpack(args))
+                        if type(scope.__result__) == "nil" then
+                            error("Native command returns nil")
+                        end
+                    end, traceback)
+                    trace.meta = oldMeta
+
+                    if not res then
+                        self:throwError(tostring(err).."\nCaused by native call to: "..func, trace)
+                    end
                 elseif type(f) == "string" or type(f) == "table" then
                     local subScope = makeScope(scope)
-
+                    local lastI = 0
                     for k, v in ipairs(args) do
                         rawset(subScope, "arg"..k, v) --Locals
+                        lastI = k
                     end
 
-                    scope.result = self:run(f, subScope, trace)
+                    rawset(subScope, "numargs", lastI)
+
+                    for k = lastI + 1, 8 do
+                        rawset(subScope, "arg"..k, "")
+                    end
+                    rawset(subScope, "__result__", "") -- force local
+
+                    scope.__result__ = self:run(f, subScope, trace)
                 elseif type(f) == "number" or type(f) == "boolean" then
-                    scope.result = f
+                    scope.__result__ = f
                 else
                     self:throwError("Trying to call nonexisting function: "..func, trace)
                 end
@@ -1005,7 +1071,7 @@ function Environment:runStatements(statements, scope, trace)
         end
     end
     
-    return scope.result
+    return scope.__result__
 end
 
 function Environment:register(name, cb, scope)
