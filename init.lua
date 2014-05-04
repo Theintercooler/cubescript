@@ -2,7 +2,8 @@ local math = require "math"
 local string = require "string"
 local table = require "table"
 local core = require "luvit.core"
-local traceback = require "debug".traceback
+local debug = require "debug"
+local traceback = debug.traceback
 
 local utils = require "luvit.utils"
 utils.DUMP_MAX_DEPTH = 100
@@ -207,7 +208,7 @@ function Lexer:parseString(buffer)
 
         local char = buffer:peekChar()
         while char do
-            if char == "@" then
+            if char:byte() == ("@"):byte() then -- Optimization bug workaround
                 local oldI = buffer.i
                 local oldLine = buffer.line
                 char = self:parseMacro(buffer)
@@ -302,10 +303,22 @@ end
 
 function Lexer:isNumber(buffer)
     local char = buffer:peekChar()
+    local next = buffer:peekChar(2)
     if isNumeric(char) then
-        return true
+        --check if the first 2 chars are valid number chars, bit hacky, don't use numbers at the start of a  word...
+        return not next or isWhiteSpace(next) or isNumeric(next) or (
+                char == "0"
+                and (
+                    next == "x"
+                    or next == "d"
+                    or next == "b"
+                ) and isNumeric(buffer:peekChar(3))
+            ) or (
+                next == "."
+                and isNumeric(buffer:peekChar(3))
+            )
     elseif char == "-"  then
-        return isNumeric(buffer:peekChar(2))
+        return isNumeric(next)
     else
         return false
     end
@@ -554,7 +567,7 @@ local _valid_var_chars = {
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
-    return isAlpha(char) or _valid_var_chars[char]
+    return isAlpha(char) or isNumeric(char) or _valid_var_chars[char]
 end
 
 function Lexer:lexizeSingleToken(buffer)
@@ -680,7 +693,7 @@ function Parser:parseOne(lex)
     statement.file = token.file
     table.insert(statement.arguments, token)
 
-    if token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator then -- (= ....)
+    if token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator or token.type == tokenType.macro or token.type == tokenType.call then -- (= ....)
         if token.type == tokenType.operator then
             token.type = tokenType.word --Convert
         end
@@ -825,6 +838,9 @@ function Environment:throwError(message, trace)
     end
     err.trace = back
     err.message = err.message .."\n\t"..table.concat(back, "\n\t")
+    if self.debug == true then
+        err.message = err.message .. "\n\nDebug info: \n"..traceback()
+    end
     error(err)
 end
 
@@ -845,12 +861,13 @@ function Environment:parse(stack)
 end
 
 function Environment:executeCallback(callback, scope, trace, meta)
-    local x = trace:pop()
-    trace:add(x)
-    trace:add({relativelineShift = x.statement.line + 1})
-    trace:add({callbackFunction = true})
+    if type(callback) == "number" then
+        return callback --TODO: is this the place where we should put this?
+    end
+
+    local info = debug.getinfo(2)
+    trace:add({callbackFunction = true, file = info.short_src, line = info.currentline})
         local ret = self:run(callback, scope, trace, meta or trace.meta)
-    trace:pop()
     trace:pop()
 
     return ret
@@ -959,7 +976,7 @@ function Environment:runArgument(token, scope, trace)
     elseif token.type == tokenType.call then
         r = self:run(token.value, scope, trace, {fileShift = token.file, lineShift = token.line})
     elseif token.type == tokenType.macro then
-        error "Macro argument not preprocessed"
+        return self:runMacros(token.value, scope, trace)
     else
         error("Unkown token type: "..token.type)
     end
@@ -1084,6 +1101,8 @@ return {
     Environment = Environment,
     Lexer = Lexer,
     Parser = Parser,
+    Buffer = Buffer,
+    tokenType = tokenType,
     createEnvironment = function()
         local env = Environment:new()
         env.lexer = Lexer:new()
