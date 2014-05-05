@@ -880,6 +880,7 @@ function Environment:run(code, scope, trace, meta)
             meta = meta or {fileShift = code.file, lineShift = code.line}
             code = code.value
         end
+        meta = meta or {}
         code = self:makeBuffer(code, meta.lineShift, meta.fileShift)
     end
 
