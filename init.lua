@@ -82,7 +82,7 @@ function Buffer:getChar()
    end
 
    local c = self.chars:sub(self.i, self.i)
-   if isLineSeperator(c) and (c ~= '\r' or self:peek() ~= '\n') then
+   if isLineSeperator(c) and (c ~= '\r' or self:peekChar() ~= '\n') then
        self.line = self.line + 1
    end
    return c
@@ -508,7 +508,7 @@ end
 
 function Lexer:parseSeperator(buffer)
     local seperator = buffer:getChar()
-    assert(seperator == ";" or seperator == "\n")
+    assert(seperator == ";" or isLineSeperator(seperator))
     return Token:new(tokenType.seperator)
 end
 
@@ -563,7 +563,8 @@ local _valid_var_chars = {
     ["?"] = true,
     ["|"] = true,
     ["&"] = true,
-    ["!"] = true
+    ["!"] = true,
+    ["/"] = true,
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
@@ -584,7 +585,7 @@ function Lexer:lexizeSingleToken(buffer)
         return self:parseCall(buffer)
     elseif char == "/" and (buffer:peekChar(2) == "/" or buffer:peekChar(2) == "*") or char == "#" then
         return self:parseComment(buffer)
-    elseif char == ";" or char == "\n" then
+    elseif char == ";" or isLineSeperator(char) then
         return self:parseSeperator(buffer)
     elseif self:isOperator(buffer) then
         return self:parseOperator(buffer)
