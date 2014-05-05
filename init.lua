@@ -1092,8 +1092,11 @@ function Environment:runStatements(statements, scope, trace)
     return scope.__result__
 end
 
-function Environment:register(name, cb, scope)
+function Environment:register(name, cb, scope, override)
     scope = scope or self.globalScope
+    if not override and type(scope[name]) ~= "nil" then
+        error("Native function overriding already existing function: "..name .. " = ".. tostring(scope[name]))
+    end
     scope[name] = cb
 end
 
