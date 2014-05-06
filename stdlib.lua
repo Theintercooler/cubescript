@@ -7,6 +7,15 @@ local cubescript = require "cubescript"
 
 local api = {}
 
+api["local"] = function (env, scope, trace, ...)
+    for k, var in pairs({...}) do
+--         if env.debug and type(scope[var]) ~= "nil" then
+--             p("Warning: local variable overrides global", var)
+--         end
+        rawset(scope, var, "")
+    end
+end
+
 function api.echo(env, scope, trace, ...)
     local args = {...}
     for k, v in pairs(args) do
@@ -22,12 +31,15 @@ local function parseList(list)
     local buffer = cubescript.Buffer:new(list)
 
     local v = {}
+    local offset = 1
     local t = lexer:lexize(buffer)
     for k, token in pairs(t) do
         if token.type == cubescript.tokenType.string or token.type == cubescript.tokenType.number then
-            v[k-1] = token.value
+            v[k-offset] = token.value
         elseif token.type == cubescript.tokenType.word then
-            v[k-1] = table.concat(token.value, "")
+            v[k-offset] = table.concat(token.value, "")
+        elseif token.type == cubescript.tokenType.seperator then
+            offset = offset + 1
         else
             p(token)
             error "unkown token type in list"
@@ -124,20 +136,99 @@ function api.format (env, scope, trace, format, ...)
     return format
 end
 
-api[">"]        = function (env, scope, trace, a, b) return tonumber(a) >       tonumber(b) end
-api[">="]       = function (env, scope, trace, a, b) return tonumber(a) >=      tonumber(b) end
-api["<"]        = function (env, scope, trace, a, b) return tonumber(a) <       tonumber(b) end
-api["<="]       = function (env, scope, trace, a, b) return tonumber(a) <=      tonumber(b) end
+api[">"]        = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) > tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
 
-api["="]        = function(env, scope, trace, a, b)  return a == b                          end
-api["=s"]       = function(env, scope, trace, a, b)  return tostring(a) == tostring(b)      end
-
-api["=f"]       = function(env, scope, trace, a, b)
-    a = tonumber(a)
-    b = tonumber(b)
-    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to =f operator.")
-    return a == b
+    return env:toBool(true)
 end
+api[">f"] = api[">"]
+
+api[">="]       = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) >= tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
+
+    return env:toBool(true)
+end
+api[">=f"] = api[">="]
+
+api["<"]        = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) < tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
+
+    return env:toBool(true)
+end
+api["<f"] = api["<"]
+
+api["<="]        = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) <= tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
+    
+    return env:toBool(true)
+end
+api["<=f"] = api["<="]
+
+api["="]        = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) == tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
+    
+    return env:toBool(true)
+end
+api["=f"] = api["="]
+
+api["!="]        = function (env, scope, trace, ...)
+    local args = {...}
+    assert(#args >= 2, "Not engough arguments provided for comperator.")
+    for k, value in ipairs(args) do
+        if k ~= #args then
+            if not (tonumber(value) ~= tonumber(args[k+1])) then
+                return env:toBool(false)
+            end
+        end
+    end
+    
+    return env:toBool(true)
+end
+api["!=f"] = api["!="]
+
+api["=s"]       = function(env, scope, trace, a, b)  return env:toBool(tostring(a) == tostring(b))      end
+
+
 
 api["divf"]     = function(env, scope, trace, a, b)
     a = tonumber(a)
@@ -147,22 +238,22 @@ api["divf"]     = function(env, scope, trace, a, b)
 end
 
 api["!"]        = function(env, scope, trace, a)
-    if a and a ~= "" and a ~= "0" then
-        return "0"
+    if env:isTrue(a) then
+        return env:toBool(false)
     else
-        return "1"
+        return env:toBool(true)
     end
 end
 
 api["?"]        = function(env, scope, trace, a, b, c)
-    if a and a ~= "" and a ~= "0" then
+    if env:isTrue(a) then
         return b
     else
         return c or ""
     end
 end
 
-api["+"]        = function(env, scope, trace, ...)
+local function plus(env, scope, trace, ...)
     local v = 0
     for k, number in pairs({...}) do
         number = tonumber(number)
@@ -174,6 +265,9 @@ api["+"]        = function(env, scope, trace, ...)
     end
     return v
 end
+
+api["+"]        = plus
+api["+f"]       = plus
 
 local function times(env, scope, trace, ...)
     local v = 0
@@ -189,6 +283,7 @@ local function times(env, scope, trace, ...)
 end
 
 api["*"]        = times
+api["*f"]       = times
 
 local function minus(env, scope, trace, ...)
     local v = 0
@@ -206,6 +301,12 @@ end
 api["-"]        = minus
 api["-f"]       = minus
 
+local function mod(env, scope, trace, a, b)
+    return a % b
+end
+
+api["mod"] = mod
+
 api["&~"]       = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator &~ does only support 2 arguments.")
     a = tonumber(a)
@@ -218,17 +319,45 @@ api["min"]      = function(env, scope, trace, ...)
     return math.min(...)
 end
 
+api["max"]      = function(env, scope, trace, ...)
+    return math.max(...)
+end
+
 api["||"]       = function(env, scope, trace, ...)
+    local argMeta = rawget(scope, "#args")
     for k, cond in pairs({...}) do
-        if cond and cond ~= "" and cond ~= "0" then
-            return "1"
+        if argMeta[k].type == cubescript.tokenType.string then
+            cond = env:executeCallback(cond, scope, trace)
+        end
+
+        if env:isTrue(cond) then
+            return env:toBool(true)
         end
     end
-    return "0"
+    return env:toBool(false)
+end
+
+api["&&"]       = function(env, scope, trace, ...)
+    local argMeta = rawget(scope, "#args")
+    for k, cond in pairs({...}) do
+        if argMeta[k].type == cubescript.tokenType.string then
+            cond = env:executeCallback(cond, scope, trace)
+        end
+
+        if not env:isTrue(cond) then
+            return env:toBool(false)
+        end
+    end
+    return env:toBool(true)
 end
 
 api["if"]       = function(env, scope, trace, cond, yes, no)
-    if cond and cond ~= "" and cond ~= "0" then
+    local argMeta = rawget(scope, "#args")
+    if argMeta[1].type == cubescript.tokenType.string then
+        cond = env:executeCallback(cond, scope, trace)
+    end
+
+    if env:isTrue(cond) then
         return env:executeCallback(yes, scope, trace)
     elseif no then
         return env:executeCallback(no, scope, trace)
@@ -239,6 +368,34 @@ end
 
 api["result"] = function(env, scope, trace, value)
     return value
+end
+
+api["cond"] = function(env, scope, trace, ...)
+    local argMeta = rawget(scope, "#args")
+    local cond
+    for k, arg in pairs({...}) do
+        if type(cond) == "nil" then
+            if argMeta[1].type == cubescript.tokenType.string then
+                cond = env:executeCallback(arg, scope, trace) or "0"
+            else
+                cond = arg
+            end
+        else
+            if env:isTrue(cond) then
+                return env:executeCallback(arg, scope, trace)
+            end
+
+            cond = nil
+        end
+    end
+
+    if cond then
+        --Default value
+        p("default", cond)
+        env:executeCallback(cond, scope, trace)
+    end
+
+    return ""
 end
 
 return {

@@ -644,7 +644,8 @@ end
 
 local statementType = {
     assignment = "assignment",
-    call = "call"
+    call = "call",
+    lookup = "lookup"
 }
 
 local Parser = core.Object:extend()
@@ -705,6 +706,8 @@ function Parser:parseOne(lex)
             end
         end
         self:parseArguments(lex, statement)
+    elseif token.type == tokenType.alias then
+        statement.type = statementType.lookup
     else
         p(lex)
         error("Unexpected type: "..token.type)
@@ -980,6 +983,7 @@ function Environment:runArgument(token, scope, trace)
     elseif token.type == tokenType.macro then
         return self:runMacros(token.value, scope, trace)
     else
+        p(token)
         error("Unkown token type: "..token.type)
     end
 
@@ -1018,6 +1022,10 @@ function Environment:runStatements(statements, scope, trace)
                 scope[var] = {value=val, line=statement.line, file=statement.file}
             trace:pop()
             scope.__result__ = val
+        elseif statement.type == statementType.lookup then
+            trace:add({statement = statement, type = "lookup", name = statement.arguments[1]})
+                scope.__result__ = self:runArgument(statement.arguments[1], scope, trace)
+            trace:pop()
         elseif statement.type == statementType.call then
             local func
             local args = {}
@@ -1033,19 +1041,26 @@ function Environment:runStatements(statements, scope, trace)
             local file = func.file
             local line = func.line
 
+            local argumentMeta = {}
+
+            for k, token in pairs(args) do
+                argumentMeta[k] = {type = token.type, file = token.file, line = token.line}
+            end
+
             trace:add({statement = statement, type = "run.args"})
                 func = self:runArgument(func, scope, trace)
                 args = self:runAllArguments(args, scope, trace)
             trace:pop()
 
-            local argumentLocations = {}
-
             for k, v in ipairs(args) do
                 if type(v) == "table" and v.line then
-                    argumentLocations[k] = {file = v.file, line = v.line}
+                    argumentMeta[k].file = v.file
+                    argumentMeta[k].line = v.line
                     args[k] = v.value
                 end
             end
+            
+            rawset(scope, "#args", argumentMeta)
 
             trace:add({statement = statement, type = "run", name = func})
                 local f = scope[func]
@@ -1101,6 +1116,25 @@ function Environment:register(name, cb, scope, override)
     scope[name] = cb
 end
 
+function Environment:isBool(value)
+    return value == "" or value == "1" or value == "0"
+end
+
+function Environment:isTrue(value)
+    if type(value) == "nil" or value == 0 or value == false or value == "0" or value == "" then
+        return false
+    else
+        return true
+    end
+end
+
+function Environment:toBool(value)
+    if not self:isTrue(value) then
+        return "0"
+    else
+        return "1"
+    end
+end
 
 return {
     Environment = Environment,
