@@ -16,6 +16,17 @@ api["local"] = function (env, scope, trace, ...)
     end
 end
 
+api["alias"] = function(env, scope, trace, name, value)
+    scope[name] = value
+    return value
+end
+
+api["do"] = function(env, scope, trace, callback)
+    return env:executeCallback(callback, scope, trace)
+end
+
+api["doargs"] = api["do"]
+
 function api.echo(env, scope, trace, ...)
     local args = {...}
     for k, v in pairs(args) do
@@ -59,6 +70,17 @@ function api.looplist (env, scope, trace, var, list, callback)
     return ""
 end
 
+function api.looplistconcat (env, scope, trace, var, list, callback)
+    list = parseList(list)
+    scope = cubescript.makeScope(scope)
+    local r = {}
+    for k, value in pairs(list) do
+        rawset(scope, var, value)
+        table.insert(r, env:executeCallback(callback, scope, trace))
+    end
+    return table.concat(r, " ")
+end
+
 function api.at(env, scope, trace, list, i)
     list = parseList(list)
     if type(list[i]) == "nil" then
@@ -69,6 +91,10 @@ function api.at(env, scope, trace, list, i)
     else
         return list[i]
     end
+end
+
+function api.listlen(env, scope, trace, list)
+    return #parseList(list)
 end
 
 function api.prettylist(env, scope, trace, list, sep)
@@ -126,7 +152,15 @@ function api.concatword (env, scope, trace, ...)
     for k, v in pairs(args) do
         args[k] = tostring(v)
     end
-    return table.concat(args, "")    
+    return table.concat(args, "")
+end
+
+function api.concat(env, scope, trace, ...)
+    local args = {...}
+    for k, v in pairs(args) do
+        args[k] = tostring(v)
+    end
+    return table.concat(args, " ")
 end
 
 function api.format (env, scope, trace, format, ...)

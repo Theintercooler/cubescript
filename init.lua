@@ -58,6 +58,10 @@ local function isWhiteSpace(char)
     return c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
 end
 
+local function ___cut_trace___(f, ...)
+    return f(...)
+end
+
 local Buffer = core.Object:extend()
 
 function Buffer:initialize(string, startLine, fileInfo)
@@ -161,6 +165,10 @@ function Lexer:error(message, wrongChar, buffer)
     end
     message = message .. "\n"..line .. "\n" .. arrow
     error (message)
+end
+
+function Lexer:isSeperator(c)
+    return (c == ";" or isLineSeperator(c))
 end
 
 function Lexer:skipWhiteSpace(buffer)
@@ -278,7 +286,7 @@ function Lexer:parseWord(buffer)
     token.value = {}
 
     local stringValue = ""
-    while char and not isWhiteSpace(char) do
+    while char and not isWhiteSpace(char) and not self:isSeperator(char) do
         char = buffer:getChar()
         --buffer:skipChar()
 
@@ -508,7 +516,7 @@ end
 
 function Lexer:parseSeperator(buffer)
     local seperator = buffer:getChar()
-    assert(seperator == ";" or isLineSeperator(seperator))
+    assert(self:isSeperator(seperator))
     return Token:new(tokenType.seperator)
 end
 
@@ -519,6 +527,7 @@ function Lexer:parseComment(buffer)
     token.value = ""
 
     if --[[char == "#" or]] char == "/" and buffer:peekChar() == "/" then 
+        token.inline = true
         if char == "/" then
             buffer:getChar() -- skip the second slash
         end
@@ -565,6 +574,7 @@ local _valid_var_chars = {
     ["&"] = true,
     ["!"] = true,
     ["/"] = true,
+    ["."] = true,
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
@@ -585,7 +595,7 @@ function Lexer:lexizeSingleToken(buffer)
         return self:parseCall(buffer)
     elseif char == "/" and (buffer:peekChar(2) == "/" or buffer:peekChar(2) == "*") or char == "#" then
         return self:parseComment(buffer)
-    elseif char == ";" or isLineSeperator(char) then
+    elseif self:isSeperator(char) then
         return self:parseSeperator(buffer)
     elseif self:isOperator(buffer) then
         return self:parseOperator(buffer)
@@ -668,11 +678,11 @@ end
 function Parser:parseArguments(lex, statement)
     while lex:peek() do
         local token = lex:peek()
-        if token and token.type ~= tokenType.seperator and token.type ~= tokenType.endOfBuffer then
+        if token and token.type ~= tokenType.seperator and token.type ~= tokenType.endOfBuffer and (token.type ~= tokenType.comment and not token.inline) then
             if token.type ~= tokenType.comment then
                 table.insert(statement.arguments, lex:next())
             else
-                lex:next()
+                lex:next() -- skip non inline comments
             end
         else
             break
@@ -695,7 +705,26 @@ function Parser:parseOne(lex)
     statement.file = token.file
     table.insert(statement.arguments, token)
 
-    if token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator or token.type == tokenType.macro or token.type == tokenType.call then -- (= ....)
+    local nextIsCall = token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator or token.type == tokenType.macro or token.type == tokenType.call
+    
+    if token.type == tokenType.alias then
+        local i = 1
+        repeat
+            local nextToken = lex:peek(i)
+            i = i + 1
+            if nextToken.type == tokenType.seperator or nextToken.type ==  tokenType.endOfBuffer then
+                nextIsCall = false
+                break
+            elseif nextToken.type == tokenType.comment then
+                --skip
+            else
+                nextIsCall = true
+                break
+            end
+        until false
+    end
+
+    if nextIsCall then -- (= ....)
         if token.type == tokenType.operator then
             token.type = tokenType.word --Convert
         end
@@ -744,6 +773,15 @@ function Trace:pop()
     local ret = self.trace[self.i]
     self.trace[self.i] = nil
     return ret
+end
+
+function Trace:copy()
+    local new = Trace:new()
+    new.i = self.i
+    for i = 1, self.i do
+        new.trace[i] = self.trace[i]
+    end
+    return new
 end
 
 local metaScope = {}
@@ -867,11 +905,28 @@ end
 function Environment:executeCallback(callback, scope, trace, meta)
     if type(callback) == "number" then
         return callback --TODO: is this the place where we should put this?
-    end
+    elseif type(callback) == "string" and type(meta) == "number" then
+        local metaArg = rawget(scope, "#args")[meta]
 
+        if metaArg then
+            callback = {
+                value = callback,
+                file = metaArg.file,
+                line = metaArg.line
+            }
+        end
+        meta = nil
+    elseif type(callback) == "table" and type(meta) == "number" then
+        meta = nil -- callback contains the data
+    elseif type(meta) == "number" then
+        meta = trace.meta
+    else
+        meta = meta or trace.meta
+    end
+    
     local info = debug.getinfo(2)
     trace:add({callbackFunction = true, file = info.short_src, line = info.currentline})
-        local ret = self:run(callback, scope, trace, meta or trace.meta)
+        local ret = self:run(callback, scope, trace, meta)
     trace:pop()
 
     return ret
@@ -903,6 +958,7 @@ end
 function Environment:lookup(value, scope, trace)
     local r
     if not scope[value] then
+        p(value, scope[value])
         self:throwError("Unkown alias lookup: "..value, trace)
     elseif type(scope[value]) == "function" then --TODO: seperate getter/setter table function
         local res, err = xpcall(function()
@@ -1068,7 +1124,7 @@ function Environment:runStatements(statements, scope, trace)
                     local oldMeta = trace.meta
                     trace.meta = {fileShift = file, lineShift = line}
                     local res, err = xpcall(function()
-                        scope.__result__ = f(self, scope, trace, unpack(args))
+                        scope.__result__ = ___cut_trace___(f, self, scope, trace, unpack(args))
                         if type(scope.__result__) == "nil" then
                             error("Native command returns nil")
                         end
@@ -1076,7 +1132,10 @@ function Environment:runStatements(statements, scope, trace)
                     trace.meta = oldMeta
 
                     if not res then
-                        self:throwError(tostring(err).."\nCaused by native call to: "..func, trace)
+                        err = tostring(err)
+                        err = err:gsub("(in function '___cut_trace___')(.*)", function(a, b) return "in cubescript call to native function: "..func end)
+                        err = err:gsub("stack traceback:\n", "")
+                        self:throwError(err, trace)
                     end
                 elseif type(f) == "string" or type(f) == "table" then
                     local subScope = makeScope(scope)
@@ -1088,7 +1147,7 @@ function Environment:runStatements(statements, scope, trace)
 
                     rawset(subScope, "numargs", lastI)
 
-                    for k = lastI + 1, 8 do
+                    for k = lastI + 1, 25 do
                         rawset(subScope, "arg"..k, "")
                     end
                     rawset(subScope, "__result__", "") -- force local
@@ -1133,6 +1192,22 @@ function Environment:toBool(value)
         return "0"
     else
         return "1"
+    end
+end
+
+function Environment:toNumber(value, default)
+    local optional = type(default) ~= "nil"
+    if (type(value) == "nil" or value == "") and optional then
+        return default
+    end
+
+    if type(value) == "number" then
+        return value
+    else
+        value = tostring(value)
+        local buffer = self:makeBuffer(value)
+        local v = self.lexer:parseNumber(buffer)
+        return v.value
     end
 end
 
