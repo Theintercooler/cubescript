@@ -728,7 +728,7 @@ function Parser:parseOne(lex)
         repeat
             local nextToken = lex:peek(i)
             i = i + 1
-            if nextToken.type == tokenType.seperator or nextToken.type ==  tokenType.endOfBuffer then
+            if not nextToken or nextToken.type == tokenType.seperator or nextToken.type ==  tokenType.endOfBuffer then
                 nextIsCall = false
                 break
             elseif nextToken.type == tokenType.comment then
@@ -982,7 +982,7 @@ function Environment:lookup(value, scope, trace)
         end, traceback)
 
         if not res then
-            self:throwError(tostring(err).."\ncaused by alias lookup (native getter): "..v, trace)
+            self:throwError(tostring(err).."\ncaused by alias lookup (native getter): "..value, trace)
         end
     elseif type(scope[value]) == "table" and type(scope[value].line) == "number" then
         r = scope[value].value

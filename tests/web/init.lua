@@ -5,7 +5,6 @@ local stdlib = require "cubescript.stdlib"
 
 local querystring = require "luvit.querystring"
 local http = require "luvit.http"
-local Stack = require "luvit.stack"
 local form = require "cubescript.tests.web.form"
 
 local server = http.createServer(function(req, res)
