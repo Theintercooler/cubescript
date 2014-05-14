@@ -261,7 +261,7 @@ end
 api["!=f"] = api["!="]
 
 api["=s"]       = function(env, scope, trace, a, b)  return env:toBool(tostring(a) == tostring(b))      end
-
+api["!=s"]      = function(env, scope, trace, a, b)  return env:toBool(tostring(a) ~= tostring(b))      end
 
 
 api["divf"]     = function(env, scope, trace, a, b)
@@ -341,6 +341,30 @@ end
 
 api["mod"] = mod
 
+api["<<"] = function(env, scope, trace, a, b, ...)
+    assert(#({...}) == 0, "Operator << does only support 2 arguments.")
+    a = tonumber(a)
+    b = tonumber(b)
+    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to << operator.")
+    return bit.lshift(a, b)
+end
+
+api[">>"] = function(env, scope, trace, a, b, ...)
+    assert(#({...}) == 0, "Operator >> does only support 2 arguments.")
+    a = tonumber(a)
+    b = tonumber(b)
+    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to >> operator.")
+    return bit.rshift(a, b)
+end
+
+api["&"]       = function(env, scope, trace, a, b, ...)
+    assert(#({...}) == 0, "Operator & does only support 2 arguments.")
+    a = tonumber(a)
+    b = tonumber(b)
+    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to & operator.")
+    return bit.band(a, b)
+end
+
 api["&~"]       = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator &~ does only support 2 arguments.")
     a = tonumber(a)
@@ -352,10 +376,12 @@ end
 api["min"]      = function(env, scope, trace, ...)
     return math.min(...)
 end
+api["minf"]     = api["min"]
 
 api["max"]      = function(env, scope, trace, ...)
     return math.max(...)
 end
+api["maxf"]     = api["max"]
 
 api["||"]       = function(env, scope, trace, ...)
     local argMeta = rawget(scope, "#args")

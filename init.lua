@@ -185,6 +185,21 @@ function Lexer:readUntilWhiteSpace(buffer)
     return s
 end
 
+function Lexer:readEscapeSequence(buffer)
+    local char = buffer:getChar()
+    local escaped = ({
+        f = "\f",
+        n = "\n",
+        r = "\r"
+    })[char]
+    
+    if not escaped then
+        self:error("Unkown escape sequence ^"..char, char, buffer)
+    end
+
+    return escaped
+end
+
 function Lexer:parseString(buffer)
     local stringType = buffer:getChar()
     if stringType == "\"" then
@@ -705,8 +720,9 @@ function Parser:parseOne(lex)
     statement.file = token.file
     table.insert(statement.arguments, token)
 
-    local nextIsCall = token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator or token.type == tokenType.macro or token.type == tokenType.call
-    
+    -- Check if argument 1 would be valid in a call
+    local nextIsCall = token.type == tokenType.number or token.type == tokenType.word or token.type == tokenType.string or token.type == tokenType.operator or token.type == tokenType.macro or token.type == tokenType.call
+
     if token.type == tokenType.alias then
         local i = 1
         repeat
@@ -1094,71 +1110,76 @@ function Environment:runStatements(statements, scope, trace)
                 end
             end
 
-            local file = func.file
-            local line = func.line
+            --Ignore executement of numbers
+            if func.type == tokenType.number then
+                scope.__result__ = func.value
+            else
+                local file = func.file
+                local line = func.line
 
-            local argumentMeta = {}
+                local argumentMeta = {}
 
-            for k, token in pairs(args) do
-                argumentMeta[k] = {type = token.type, file = token.file, line = token.line}
-            end
-
-            trace:add({statement = statement, type = "run.args"})
-                func = self:runArgument(func, scope, trace)
-                args = self:runAllArguments(args, scope, trace)
-            trace:pop()
-
-            for k, v in ipairs(args) do
-                if type(v) == "table" and v.line then
-                    argumentMeta[k].file = v.file
-                    argumentMeta[k].line = v.line
-                    args[k] = v.value
+                for k, token in pairs(args) do
+                    argumentMeta[k] = {type = token.type, file = token.file, line = token.line}
                 end
-            end
-            
-            rawset(scope, "#args", argumentMeta)
 
-            trace:add({statement = statement, type = "run", name = func})
-                local f = scope[func]
-                if type(f) == "function" then
-                    local oldMeta = trace.meta
-                    trace.meta = {fileShift = file, lineShift = line}
-                    local res, err = xpcall(function()
-                        scope.__result__ = ___cut_trace___(f, self, scope, trace, unpack(args))
-                        if type(scope.__result__) == "nil" then
-                            error("Native command returns nil")
+                trace:add({statement = statement, type = "run.args"})
+                    func = self:runArgument(func, scope, trace)
+                    args = self:runAllArguments(args, scope, trace)
+                trace:pop()
+
+                for k, v in ipairs(args) do
+                    if type(v) == "table" and v.line then
+                        argumentMeta[k].file = v.file
+                        argumentMeta[k].line = v.line
+                        args[k] = v.value
+                    end
+                end
+                
+                rawset(scope, "#args", argumentMeta)
+
+                trace:add({statement = statement, type = "run", name = func})
+                    local f = scope[func]
+                    if type(f) == "function" then
+                        local oldMeta = trace.meta
+                        trace.meta = {fileShift = file, lineShift = line}
+                        local res, err = xpcall(function()
+                            scope.__result__ = ___cut_trace___(f, self, scope, trace, unpack(args))
+                            if type(scope.__result__) == "nil" then
+                                error("Native command returns nil")
+                            end
+                        end, traceback)
+                        trace.meta = oldMeta
+
+                        if not res then
+                            err = tostring(err)
+                            err = err:gsub("(in function '___cut_trace___')(.*)", function(a, b) return "in cubescript call to native function: "..func end)
+                            err = err:gsub("stack traceback:\n", "")
+                            self:throwError(err, trace)
                         end
-                    end, traceback)
-                    trace.meta = oldMeta
+                    elseif type(f) == "string" or type(f) == "table" then
+                        local subScope = makeScope(scope)
+                        local lastI = 0
+                        for k, v in ipairs(args) do
+                            rawset(subScope, "arg"..k, v) --Locals
+                            lastI = k
+                        end
 
-                    if not res then
-                        err = tostring(err)
-                        err = err:gsub("(in function '___cut_trace___')(.*)", function(a, b) return "in cubescript call to native function: "..func end)
-                        err = err:gsub("stack traceback:\n", "")
-                        self:throwError(err, trace)
+                        rawset(subScope, "numargs", lastI)
+
+                        for k = lastI + 1, 25 do
+                            rawset(subScope, "arg"..k, "")
+                        end
+                        rawset(subScope, "__result__", "") -- force local
+
+                        scope.__result__ = self:run(f, subScope, trace)
+                    elseif type(f) == "number" or type(f) == "boolean" then
+                        scope.__result__ = f
+                    else
+                        self:throwError("Trying to call nonexisting function: "..func, trace)
                     end
-                elseif type(f) == "string" or type(f) == "table" then
-                    local subScope = makeScope(scope)
-                    local lastI = 0
-                    for k, v in ipairs(args) do
-                        rawset(subScope, "arg"..k, v) --Locals
-                        lastI = k
-                    end
-
-                    rawset(subScope, "numargs", lastI)
-
-                    for k = lastI + 1, 25 do
-                        rawset(subScope, "arg"..k, "")
-                    end
-                    rawset(subScope, "__result__", "") -- force local
-
-                    scope.__result__ = self:run(f, subScope, trace)
-                elseif type(f) == "number" or type(f) == "boolean" then
-                    scope.__result__ = f
-                else
-                    self:throwError("Trying to call nonexisting function: "..func, trace)
-                end
-            trace:pop()
+                trace:pop()
+            end
         else
             error("Unkown statement type")
         end
