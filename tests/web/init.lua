@@ -9,13 +9,16 @@ local form = require "cubescript.tests.web.form"
 
 local server = http.createServer(function(req, res)
     if req.url == "/run" then
+        local i = 0
         local dataBuffer = {}
         req:on("data", function(chunk)
-            table.insert(dataBuffer, chunk)
+            i = i + 1
+            dataBuffer[i] = chunk
         end)
 
         req:on("end", function()
-            local data = querystring.parse(table.concat(dataBuffer, ""))
+            local buffer = table.concat(dataBuffer, "")
+            local data = querystring.parse(buffer)
             local code = tostring(data.code)
             print (req.socket._handle:getpeername().address, "executes", (("%q"):format(code)):gsub("\\\n", "\\n"))
 
@@ -37,6 +40,10 @@ local server = http.createServer(function(req, res)
 
                 return env:run({value = code, file = "<form>", line = 1})
             end)
+
+            res:writeHead(200, {
+                ["Content-Type"] = "text/plain"
+            })
 
             if data then
                 if not err then
