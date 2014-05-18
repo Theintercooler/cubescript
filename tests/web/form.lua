@@ -1,4 +1,4 @@
-return [[
+return function(src) return [[
 <!DOCTYPE html>
 <html>
     <head>
@@ -10,17 +10,11 @@ return [[
             <h1>Cubescript runner <small>I CAN HAZ CUBESCRIPT ONLINE<small></h1>
             <form role="form" class="form-horizontal">
                 <div class="form-group">
-                    <textarea id="codeform">
-a = [
-    echo "Hello world" $arg1
-    result "Return"
-]
-
-a "in cubescript!"
-                    </textarea>
+                    <textarea id="codeform">]] .. src .. [[</textarea>
                 </div>
                 <div class="form-group">
                     <button type="button" class="btn btn-primary" id="button">Get the cube rolling!</button>
+                    <button type="button" class="btn btn-default" id="save_button">Create url!</button>
                 </div>
             </form>
             <pre id="result"></pre>
@@ -45,8 +39,15 @@ a "in cubescript!"
                         $("#result").text(a)
                     })
                 })
+
+                $("#save_button").on("click", function(event)
+                {
+                    event.preventDefault();
+                    var code = editor.getValue()
+                    document.location = "/?script="+ encodeURIComponent(code)
+                })
             })
         </script>
     </body>
 </html>
-]]
+]] end

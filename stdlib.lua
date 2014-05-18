@@ -14,6 +14,7 @@ api["local"] = function (env, scope, trace, ...)
 --         end
         rawset(scope, var, "")
     end
+    return ""
 end
 
 api["alias"] = function(env, scope, trace, name, value)
@@ -123,7 +124,7 @@ end
 local function loopConcat(env, scope, trace, var, offset, step, length, body, seperator)
     local loopScope = cubescript.makeScope(scope)
     local ret = {}
-    
+
     for i=0,length-1 do
         rawset(loopScope, var, offset + i * step)
         ret[i+1] = env:executeCallback(body, loopScope, trace)
@@ -304,7 +305,7 @@ api["+"]        = plus
 api["+f"]       = plus
 
 local function times(env, scope, trace, ...)
-    local v = 0
+    local v = 1
     for k, number in pairs({...}) do
         number = tonumber(number)
         if type(number) == "nil" then
@@ -382,6 +383,10 @@ api["max"]      = function(env, scope, trace, ...)
     return math.max(...)
 end
 api["maxf"]     = api["max"]
+
+api["abs"]      = function(env, scope, trace, a)
+    return math.abs(env:toNumber(a))
+end
 
 api["||"]       = function(env, scope, trace, ...)
     local argMeta = rawget(scope, "#args")
