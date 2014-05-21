@@ -5,30 +5,60 @@ local os = require "os"
 local cubescript = require "cubescript"
 
 local padName = 20
-local function pad(name)
+local function pad(name, i)
     name = tostring(name)
-    local pad = padName-#name
+    local pad = (i or padName)-#name
     pad = math.max(0, pad)
-    padName = math.max(padName, pad)
+    if not i then
+        padName = math.max(padName, pad)
+    end
     return name .. string.rep(" ", pad)
 end
+
+local total = 0
+local fails = 0
 
 local function assertEquals(n, args)
     local a
     local argc = 0
+    local failed = false
+    local function fail()
+        if not failed then
+            failed = true
+            fails = fails + 1
+        end
+    end
     for k, value in pairs(args) do
         if argc == 0 then
             a = value
         elseif value ~= a then
+            fail()
             print (("[✖ %s] %s (%s) does not equal %s (%s)"):format(pad(k), a, type(a), value, type(value)))
         else
-            print (("[✓ %s] %s (%s) does equal %s (%s)"):format(pad(k), a, type(a), value, type(value)))
+            local k = tostring(a)
+            local v = tostring(value)
+
+            if k:len() > 15 then
+                k = k:sub(1, 12).."..."
+            end
+
+            k = pad(k, 15)
+
+            if v:len() > 15 then
+                v = v:sub(1, 12).."..."
+            end
+
+            v = pad(v, 15)
+
+            print (("[✓ %s] %s (%s) does equal %s (%s)"):format(pad(k), k, pad(type(a), 6), v, pad(type(value), 6)))
         end
         argc = argc + 1
     end
     if n ~= argc then
+        fail()
         print(("[✖ %s] Some arguments are missing (%i ~= %i)"):format(pad("unkown"), n, argc))
     end
+    total = total + 1
 end
 
 local tests = {}
@@ -57,6 +87,7 @@ function tests:lexer()
         { in_ = "0x2f",  out = 0x2f      },
         { in_ = ".23",   out = .23       },
         { in_ = "0.23",  out = 0.23      },
+        { in_ = "0b011", out = 3         },
     }
     for k, v in pairs(values) do
         local lex = cubescript.Lexer:new()
@@ -149,4 +180,4 @@ for k, test in pairs(tests) do
 end
 local endTime = os.time()
 local timeDiff = endTime - startTime
-print (("Ran %i tests in %i seconds"):format(#tests, timeDiff))
+print (("Ran %i/%i tests succeeded %i seconds"):format(total-fails, total, timeDiff))
