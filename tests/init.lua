@@ -47,12 +47,25 @@ function tests:buffer()
 end
 
 function tests:lexer()
-    local lex = cubescript.Lexer:new()
-    local buf = cubescript.Buffer:new("10")
-    local token = lex:parseNumber(buf)
+    local values = {
+        { in_ = "10",    out = 10        },
+        { in_ = "0",     out = 0         },
+        { in_ = "-10",   out = -10       },
+        { in_ = "-0x2F", out = -0x2f     },
+        { in_ = "-0x2f", out = -0x2f     },
+        { in_ = "0x2F",  out = 0x2f      },
+        { in_ = "0x2f",  out = 0x2f      },
+        { in_ = ".23",   out = .23       },
+        { in_ = "0.23",  out = 0.23      },
+    }
+    for k, v in pairs(values) do
+        local lex = cubescript.Lexer:new()
+        local buf = cubescript.Buffer:new(v.in_)
+        local token = lex:lexizeSingleToken(buf)
 
-    assertEquals(2, { ["token.type"] = token.type, ["tokenType.number"] = cubescript.tokenType.number})
-    assertEquals(2, { ["token.value"] = token.value, ["number <10>"] = 10})
+        assertEquals(2, { ["token.type"] = token.type, ["tokenType.number"] = cubescript.tokenType.number})
+        assertEquals(2, { ["token.value"] = token.value, ["number <"..tostring(v.in_)..">"] = v.out})
+    end
 end
 
 function tests:lexer_string()

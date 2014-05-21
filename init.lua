@@ -360,7 +360,7 @@ function Lexer:isNumber(buffer)
         return not next or isWhiteSpace(next) or isNumeric(next) or (
                 char == 48 --"0"
                 and (
-                    next == 102 or next == 88 --x or X
+                    next == 120 or next == 88 --x or X
                     or next == 100 or next == 68 -- d or D
                     or next == 98 or next == 66 -- b or B
                 ) and isNumeric(buffer:peekChar(3))
@@ -368,7 +368,7 @@ function Lexer:isNumber(buffer)
                 next == 46 -- .
                 and isNumeric(buffer:peekChar(3))
             )
-    elseif char == 45  then -- -
+    elseif char == 45  or char == 46 then -- - or .
         return isNumeric(next)
     else
         return false
