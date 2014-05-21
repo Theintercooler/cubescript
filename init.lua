@@ -1,61 +1,36 @@
+local ffi = require "ffi"
 local math = require "math"
 local string = require "string"
 local table = require "table"
+local bit = require "bit"
 local core = require "luvit.core"
 local debug = require "debug"
 local traceback = debug.traceback
 
-local utils = require "luvit.utils"
-utils.DUMP_MAX_DEPTH = 100
 
-function string.split(str, pat)
-    local t = {} -- NOTE: use {n = 0} in Lua-5.0
-            local fpat = "(.-)" .. pat
-    local last_end = 1
-    local s, e, cap = str:find (fpat, 1)
-
-    while s do
-        if s ~= 1 or cap ~= "" then
-            table.insert(t, cap)
-        end
-        last_end = e+1
-        s, e, cap = str:find(fpat, last_end)
-    end
-    if last_end <= #str then
-        cap = str:sub(last_end)
-        table.insert(t, cap)
-    end
-    return t
-end
-
-local function isAlpha(char)
-    if not char then return end
-    local c = char:byte()
+local function isAlpha(c)
+    if type(c) == "nil" then return false end
     return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
 end
 
-local function isNumeric(char)
-    if not char then return end
-    local c = char:byte()
+local function isNumeric(c)
+    if type(c) == "nil" then return false end
     return (c >= 48 and c <= 57)
 end
 
-local function isAlphaNumeric(char)
-    if not char then return end
-    local c = char:byte()
+local function isAlphaNumeric(c)
+    if type(c) == "nil" then return false end
     return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
 end
 
-local function isLineSeperator(char)
-    if not char then return end
-    local c = char:byte()
+local function isLineSeperator(c)
+    if type(c) == "nil" then return false end
     return c == 10 or c == 13
 end
 
-local function isWhiteSpace(char)
-    if not char then return end
-    local c = char:byte()
-    return c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
+local function isWhiteSpace(c)
+    if type(c) == "nil" then return false end
+    return c == 20 or c == 32 or c == 10 or c == 13 or c == 9 or c == 11 or c == 12 -- space, \n, \r, \t, \v, \f
 end
 
 local function ___cut_trace___(f, ...)
@@ -66,26 +41,31 @@ local Buffer = core.Object:extend()
 
 function Buffer:initialize(string, startLine, fileInfo)
     if type(string) ~= "string" then
-        error("No string was given for argument #1")
+        error (("No string was given for argument #1 (given: %s (%s))"):format(tostring(string), type(string)))
     end
     self.i = 0
+    self.length = #string
+    self.buffer = ffi.new("char[?]", self.length + 1, string)
     self.line = startLine or 1
-    self.chars = string
     self.file = fileInfo
 end
 
+function Buffer:getCharPointer(i)
+    return self.buffer + (i or self.i) - 1
+end
+
 function Buffer:skipChar()
-    self.i = self.i + 1 
+    self.i = self.i + 1
 end
 
 function Buffer:getChar()
    self:skipChar()
 
-   if self.i  > self.chars:len() or self.i < 0 then
+   if self.i  > self.length or self.i < 0 then
        return nil
    end
 
-   local c = self.chars:sub(self.i, self.i)
+   local c = self.buffer[self.i-1]
    if isLineSeperator(c) and (c ~= '\r' or self:peekChar() ~= '\n') then
        self.line = self.line + 1
    end
@@ -94,11 +74,11 @@ end
 
 function Buffer:peekChar(peek)
     peek = peek or 1
-    if self.i + peek > self.chars:len() or self.i < 0 then
+    if self.i + peek > self.length or self.i < 0 then
         return nil
     end
 
-    return self.chars:sub(self.i + peek, self.i + peek)
+    return self.buffer[self.i + peek - 1]
 end
 
 function Buffer:undoChar()
@@ -148,7 +128,7 @@ function Lexer:error(message, wrongChar, buffer)
     local offset = 0
     local char = buffer:getChar()
     while char and not isLineSeperator(char) do
-        line = line .. char
+        line = line .. self:getChar(char, buffer)
         char = buffer:getChar()
         if buffer.i <= location then
             offset = offset + 1
@@ -158,17 +138,26 @@ function Lexer:error(message, wrongChar, buffer)
     local arrow = ("."):rep(offset) .. "^"
 
     if wrongChar then
-        if isLineSeperator(wrongChar) then
-            char = "<eol>"
+        local char
+        if type(wrongChar) ~= "string" then
+            wrongChar = tonumber(wrongChar)
+
+            if isLineSeperator(wrongChar) then
+                char = "<eol>"
+            elseif wrongChar < 0 then
+                char = "<utf8>"
+            else
+                char = string.char(tonumber(wrongChar) or 0)
+            end
         end
-        message = fileLocation .. ":" .. lineLocation .. " " .. message .." got: "..tostring(wrongChar)
+        message = ("%s:%i %s got: %s (%i)"):format(fileLocation, lineLocation, message, char, wrongChar)
     end
     message = message .. "\n"..line .. "\n" .. arrow
     error (message)
 end
 
 function Lexer:isSeperator(c)
-    return (c == ";" or isLineSeperator(c))
+    return (c == 59 or isLineSeperator(c)) -- ; \n or \r
 end
 
 function Lexer:skipWhiteSpace(buffer)
@@ -180,7 +169,7 @@ end
 function Lexer:readUntilWhiteSpace(buffer)
     local s = ""
     while not isWhiteSpace(buffer:peekChar()) do
-        s = s .. buffer:getChar()
+        s = s .. self:getChar(nil, buffer)
     end
     return s
 end
@@ -188,9 +177,9 @@ end
 function Lexer:readEscapeSequence(buffer)
     local char = buffer:getChar()
     local escaped = ({
-        f = "\f",
-        n = "\n",
-        r = "\r"
+        [102] = "\f",
+        [110] = "\n",
+        [114] = "\r"
     })[char]
     
     if not escaped then
@@ -200,27 +189,62 @@ function Lexer:readEscapeSequence(buffer)
     return escaped
 end
 
+function Lexer:getChar(char, buffer)
+    if not char then
+        char = buffer:getChar()
+    end
+
+    if char < 0 then --utf8 char
+        local len
+        local modus = bit.band(char, 224)
+        if modus == 192 then --2 byte
+            len = 2
+        else
+            modus = bit.band(char, 240)
+            if modus == 224 then -- 3 byte
+                len = 3
+            else
+                modus = bit.band(char, 248)
+                if modus == 240 then -- 4 byte
+                    len = 4
+                end
+            end
+        end
+
+        if not len then
+            self:error("Invalid UTF8 char", char, buffer)
+        end
+
+        local v = ffi.string(buffer:getCharPointer(), len)
+        buffer.i = buffer.i + len - 1
+        return v
+    else
+        return string.char(char)
+    end
+end
+
 function Lexer:parseString(buffer)
     local stringType = buffer:getChar()
-    if stringType == "\"" then
+    if stringType == 34 then -- "
         local token = Token:new(tokenType.string)
-        token.value = ""
-
+        local value = {}
         local char = buffer:getChar()
         while char do
-            if char == "^" then
+            if char == 94 then -- ^
                 char = self:readEscapeSequence(buffer)
             elseif char == stringType then
                 break
             end
 
-            token.value = token.value .. char
+            value[#value + 1] = self:getChar(char, buffer)
 
             char = buffer:getChar()
         end
 
+        token.value = table.concat(value, "")
+
         if char ~= stringType then
-            self:error("Expected closing "..stringType, char, buffer)
+            self:error("Expected closing "..string.char(stringType), char, buffer)
         end
 
         return token
@@ -231,7 +255,7 @@ function Lexer:parseString(buffer)
 
         local char = buffer:peekChar()
         while char do
-            if char:byte() == ("@"):byte() then -- Optimization bug workaround
+            if char == 64 then -- @
                 local oldI = buffer.i
                 local oldLine = buffer.line
                 char = self:parseMacro(buffer)
@@ -242,18 +266,22 @@ function Lexer:parseString(buffer)
                 end
             else
                 char = buffer:getChar()
-                if char == "]" then
+                if char == 93 then -- ]
                     stack = stack - 1
 
                     if stack == 0 then
                         break
                     end
-                elseif char == "[" then
+                elseif char == 91 then -- [
                     stack = stack + 1
                 end
             end
 
-            parts[#parts+1] = char
+            if type(char) ~= "table" then
+                parts[#parts+1] = self:getChar(char, buffer)
+            else
+                parts[#parts+1] = char
+            end
 
             char = buffer:peekChar()
         end
@@ -305,13 +333,13 @@ function Lexer:parseWord(buffer)
         char = buffer:getChar()
         --buffer:skipChar()
 
-        if char == "@" then
+        if char == 64 then -- @
             table.insert(token.value, stringValue)
             stringValue = nil
             buffer:undoChar()
             table.insert(token.value, self:parseMacro(buffer))
         else
-            stringValue = (stringValue or "") .. char
+            stringValue = (stringValue or "") .. self:getChar(char, buffer)
         end
 
         char = buffer:peekChar()
@@ -330,17 +358,17 @@ function Lexer:isNumber(buffer)
     if isNumeric(char) then
         --check if the first 2 chars are valid number chars, bit hacky, don't use numbers at the start of a  word...
         return not next or isWhiteSpace(next) or isNumeric(next) or (
-                char == "0"
+                char == 48 --"0"
                 and (
-                    next == "x"
-                    or next == "d"
-                    or next == "b"
+                    next == 102 or next == 88 --x or X
+                    or next == 100 or next == 68 -- d or D
+                    or next == 98 or next == 66 -- b or B
                 ) and isNumeric(buffer:peekChar(3))
             ) or (
-                next == "."
+                next == 46 -- .
                 and isNumeric(buffer:peekChar(3))
             )
-    elseif char == "-"  then
+    elseif char == 45  then -- -
         return isNumeric(next)
     else
         return false
@@ -354,7 +382,7 @@ function Lexer:parseNumber(buffer)
 
     local negative = false
 
-    if char == "-" or char == "+" then
+    if char == 45 or char == 43 then -- - or +
         negative = char == "-"
         char = buffer:getChar()
     end
@@ -362,8 +390,8 @@ function Lexer:parseNumber(buffer)
     local base = 10
     local numberType = "d"
 
-    if char == "0" and isAlpha(buffer:peekChar()) then
-        numberType = buffer:getChar()
+    if char == 48 and isAlpha(buffer:peekChar()) then
+        numberType = self:getChar(nil, buffer)
         char = buffer:getChar()
     end
 
@@ -372,6 +400,8 @@ function Lexer:parseNumber(buffer)
         base = 16
     elseif numberType == "b" then
         base = 2
+    else
+        self:error("Invalid base", string.byte(numberType), buffer)
     end
     local finalShift = 0
     local noPeek = false
@@ -381,25 +411,31 @@ function Lexer:parseNumber(buffer)
         end
 
         local value = ({
-            ["0"] = 0,
-            ["1"] = 1,
-            ["2"] = 2,
-            ["3"] = 3,
-            ["4"] = 4,
-            ["5"] = 5,
-            ["6"] = 6,
-            ["7"] = 7,
-            ["8"] = 8,
-            ["9"] = 9,
-            ["a"] = 10,
-            ["b"] = 11,
-            ["c"] = 12,
-            ["d"] = 13,
-            ["e"] = 14,
-            ["f"] = 15
-        })[char:lower()]
+            [48] = 0,
+            [49] = 1,
+            [50] = 2,
+            [51] = 3,
+            [52] = 4,
+            [53] = 5,
+            [54] = 6,
+            [55] = 7,
+            [56] = 8,
+            [57] = 9,
+            [97] = 10, --a
+            [65] = 10, --A
+            [98] = 11, --b
+            [66] = 11, --B
+            [99] = 12, --c
+            [67] = 12, --C
+            [100] = 13,--d
+            [68] = 13,--D
+            [101] = 14,--e
+            [69] = 14,--E
+            [102] = 15, --f
+            [70] = 15 --F
+        })[char]
 
-        if char == "." then
+        if char == 46 then -- .
             finalShift = 1
         elseif type(value) == "nil" then
             self:error("Invalid number", char, buffer)
@@ -418,7 +454,7 @@ function Lexer:parseNumber(buffer)
     end
 
     if not noPeek then
-        self:error("Invalid number", char, buffer)
+        self:error("Invalid number (premature end)", char, buffer)
     end
     
 
@@ -439,7 +475,7 @@ function Lexer:parseMacro(buffer)
 
     token.stack = 0
 
-    while char == "@" do
+    while char == 64 do --@
         token.stack = token.stack + 1
         buffer:skipChar()
         char = buffer:peekChar()
@@ -449,9 +485,9 @@ function Lexer:parseMacro(buffer)
         self:error("Expecting start of macro", char, buffer)
     end
 
-    if char == "[" then
+    if char == 91 then -- [
         token.value = self:parseString(buffer)
-    elseif char == "(" then
+    elseif char == 40 then -- (
         token.value = self:parseCall(buffer)
     else
         token.value = ""
@@ -460,7 +496,7 @@ function Lexer:parseMacro(buffer)
         while char and isAlphaNumeric(char) do
             char = buffer:getChar()
 
-            token.value = token.value .. char
+            token.value = token.value .. self:getChar(char, buffer)
 
             char = buffer:peekChar()
         end
@@ -472,16 +508,16 @@ end
 function Lexer:parseCall(buffer)
     --TODO: macros!
     local open = buffer:getChar()
-    assert(open == "(")
+    assert(open == 40) --(
 
     local token = Token:new(tokenType.call)
     token.value = ""
     local stack = 1
     local char = buffer:getChar()
     while char do
-        if char == "(" then
+        if char == 40 then -- (
             stack = stack + 1
-        elseif char == ")" then
+        elseif char == 41 then -- )
             stack = stack - 1
 
             if stack == 0 then
@@ -489,12 +525,12 @@ function Lexer:parseCall(buffer)
             end
         end
 
-        token.value = token.value .. char
+        token.value = token.value .. self:getChar(char, buffer)
 
         char = buffer:getChar()
     end
 
-    if char ~= ")" then
+    if char ~= 41 then -- )
         self:error("Expected closing )", char, buffer)
     end
 
@@ -502,20 +538,22 @@ function Lexer:parseCall(buffer)
 end
 
 Lexer.operators = {
-    ["="] = "=",
+    ["61"] = "=",
 }
 function Lexer:isOperator(buffer)
     local i = 1
     local char = buffer:peekChar(i)
-    local str = ""
+    local op = {}
 
     while char and not isWhiteSpace(char) do
-        str = str .. char
+        op[#op + 1] = tostring(char)
         i = i + 1
         char = buffer:peekChar(i)
     end
+    
+    op = table.concat(op, "-")
 
-    return self.operators[str]
+    return self.operators[op]
 end
 
 function Lexer:parseOperator(buffer)
@@ -541,30 +579,27 @@ function Lexer:parseComment(buffer)
     local token = Token:new(tokenType.comment)
     token.value = ""
 
-    if --[[char == "#" or]] char == "/" and buffer:peekChar() == "/" then 
+    if --[[char == "#" or]] char == 47 and buffer:peekChar() == 47 then  -- /
         token.inline = true
-        if char == "/" then
+        if char == 47 then
             buffer:getChar() -- skip the second slash
         end
 
         char = buffer:getChar()
 
-        while char and char ~= "\n" and char ~= "\r" do
-            token.value = token.value .. char
-            if isLineSeperator(buffer:peekChar()) then
-                break
-            end
+        while char and not isLineSeperator(char) do
+            token.value = token.value .. self:getChar(char, buffer)
             char = buffer:getChar()
         end
-    elseif char == "/" and buffer:peekChar() == "*" then
-        buffer:getChar() -- skip the *
+    elseif char == 47 and buffer:peekChar() == 42 then
+        buffer:skipChar() -- skip the *
         char = buffer:getChar()
 
         while char and not (char == "*" and buffer:peekChar() == "/") do
             token.value = token.value .. char
             char = buffer:getChar()
         end
-        buffer:getChar() -- skip the ending /
+        buffer:skipChar() -- skip the ending /
     else
         self:error ("Malformatted comment", char, buffer)
     end
@@ -577,19 +612,19 @@ function Lexer:parseEndOfBuffer()
 end
 
 local _valid_var_chars = {
-    ["+"] = true,
-    ["-"] = true,
-    ["*"] = true,
-    ["="] = true,
-    ["<"] = true,
-    [">"] = true,
-    ["_"] = true,
-    ["?"] = true,
-    ["|"] = true,
-    ["&"] = true,
-    ["!"] = true,
-    ["/"] = true,
-    ["."] = true,
+    [33] = true, -- !
+    [38] = true, -- &
+    [42] = true, -- *
+    [43] = true, -- +
+    [45] = true, -- -
+    [46] = true, -- .
+    [47] = true, -- /
+    [60] = true, -- <
+    [61] = true, -- =
+    [62] = true, -- >
+    [63] = true, -- ?
+    [95] = true, -- _
+    [124] = true, -- |
 }
 function Lexer:validVariableChar(buffer)
     local char = buffer:peekChar()
@@ -600,15 +635,15 @@ function Lexer:lexizeSingleToken(buffer)
     self:skipWhiteSpace(buffer)
     local char = buffer:peekChar()
 
-    if char == "[" or char == "\"" then
+    if char == 91 or char == 34 then -- [ or "
         return self:parseString(buffer)
-    elseif char == "$" then
+    elseif char == 36 then -- $
         return self:parseAlias(buffer)
-    elseif char == "@" then
+    elseif char == 64 then -- @
         return self:parseMacro(buffer)
-    elseif char == "(" then
+    elseif char == 40 then -- (
         return self:parseCall(buffer)
-    elseif char == "/" and (buffer:peekChar(2) == "/" or buffer:peekChar(2) == "*") or char == "#" then
+    elseif char == 47 and (buffer:peekChar(2) == 47 or buffer:peekChar(2) == 42) then -- / and (/ or *)
         return self:parseComment(buffer)
     elseif self:isSeperator(char) then
         return self:parseSeperator(buffer)
@@ -1237,7 +1272,9 @@ return {
     Lexer = Lexer,
     Parser = Parser,
     Buffer = Buffer,
+    LexerStack = LexerStack,
     tokenType = tokenType,
+    statementType = statementType,
     createEnvironment = function()
         local env = Environment:new()
         env.lexer = Lexer:new()
