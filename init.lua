@@ -383,7 +383,7 @@ function Lexer:parseNumber(buffer)
     local negative = false
 
     if char == 45 or char == 43 then -- - or +
-        negative = char == "-"
+        negative = char == 45
         char = buffer:getChar()
     end
 
