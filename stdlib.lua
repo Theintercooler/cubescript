@@ -125,6 +125,10 @@ local function loopConcat(env, scope, trace, var, offset, step, length, body, se
     local loopScope = cubescript.makeScope(scope)
     local ret = {}
 
+    offset = env:toNumber(offset)
+    step= env:toNumber(step)
+    length= env:toNumber(length)
+
     for i=0,length-1 do
         rawset(loopScope, var, offset + i * step)
         ret[i+1] = env:executeCallback(body, loopScope, trace)
