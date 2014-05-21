@@ -288,15 +288,10 @@ api["?"]        = function(env, scope, trace, a, b, c)
     end
 end
 
-local function plus(env, scope, trace, ...)
-    local v = 0
+local function plus(env, scope, trace, v, ...)
+    v = env:toNumber(v)
     for k, number in pairs({...}) do
-        number = tonumber(number)
-        if type(number) == "nil" then
-            p(...)
-            error("Arg #"..tostring(k).." is not a number: "..tostring(({...})[k]))
-        end
-        v = v + number
+        v = v + env:toNumber(number)
     end
     return v
 end
@@ -304,15 +299,10 @@ end
 api["+"]        = plus
 api["+f"]       = plus
 
-local function times(env, scope, trace, ...)
-    local v = 1
+local function times(env, scope, trace, v, ...)
+    v = env:toNumber(v)
     for k, number in pairs({...}) do
-        number = tonumber(number)
-        if type(number) == "nil" then
-            p(...)
-            error("Arg #"..tostring(k).." is not a number: "..tostring(({...})[k]))
-        end
-        v = v * number
+        v = v * env:toNumber(number)
     end
     return v
 end
@@ -320,15 +310,10 @@ end
 api["*"]        = times
 api["*f"]       = times
 
-local function minus(env, scope, trace, ...)
-    local v = 0
+local function minus(env, scope, trace, v, ...)
+    v = env:toNumber(v)
     for k, number in pairs({...}) do
-        number = tonumber(number)
-        if type(number) == "nil" then
-            p(...)
-            error("Arg #"..tostring(k).." is not a number: "..tostring(({...})[k]))
-        end
-        v = v - number
+        v = v - env:toNumber(number)
     end
     return v
 end
@@ -337,6 +322,8 @@ api["-"]        = minus
 api["-f"]       = minus
 
 local function mod(env, scope, trace, a, b)
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     return a % b
 end
 
@@ -344,43 +331,53 @@ api["mod"] = mod
 
 api["<<"] = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator << does only support 2 arguments.")
-    a = tonumber(a)
-    b = tonumber(b)
-    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to << operator.")
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     return bit.lshift(a, b)
 end
 
 api[">>"] = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator >> does only support 2 arguments.")
-    a = tonumber(a)
-    b = tonumber(b)
-    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to >> operator.")
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     return bit.rshift(a, b)
 end
 
 api["&"]       = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator & does only support 2 arguments.")
-    a = tonumber(a)
-    b = tonumber(b)
-    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to & operator.")
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     return bit.band(a, b)
 end
 
 api["&~"]       = function(env, scope, trace, a, b, ...)
     assert(#({...}) == 0, "Operator &~ does only support 2 arguments.")
-    a = tonumber(a)
-    b = tonumber(b)
-    assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to &~ operator.")
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     return bit.band(a, bit.bnot(b))
 end
 
 api["min"]      = function(env, scope, trace, ...)
-    return math.min(...)
+    local args = {...}
+    assert(#args > 0, "Operator min requires more than 0 arguments.")
+
+    for k, v in pairs(args) do
+        args[k] = env:toNumber(v)
+    end
+
+    return math.min(unpack(args))
 end
 api["minf"]     = api["min"]
 
 api["max"]      = function(env, scope, trace, ...)
-    return math.max(...)
+    local args = {...}
+    assert(#args > 0, "Operator min requires more than 0 arguments.")
+
+    for k, v in pairs(args) do
+        args[k] = env:toNumber(v)
+    end
+
+    return math.max(unpack(args))
 end
 api["maxf"]     = api["max"]
 
