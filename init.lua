@@ -40,17 +40,28 @@ end
 local Buffer = core.Object:extend()
 
 function Buffer:initialize(string, startLine, fileInfo)
-    if type(string) ~= "string" then
-        error (("No string was given for argument #1 (given: %s (%s))"):format(tostring(string), type(string)))
-    end
     self.i = 0
-    self.length = #string
-    self.buffer = ffi.new("char[?]", self.length + 1, string)
     self.line = startLine or 1
     self.file = fileInfo
+    if ffi.istype ("const char *", string) or ffi.istype ("char *", string) or ffi.istype ("char []", string) then
+        -- assume \0 terminated string
+        local s = string
+        while s[0] ~= 0 do s = s + 1 end
+        self.length = tonumber(s - string)
+        self.buffer = string
+    elseif type(string) ~= "string" then
+        error (("No string was given for argument #1 (given: %s (%s))"):format(tostring(string), type(string)))
+    else
+        -- Lua string as argument, create new buffer
+        self.length = #string
+        self.buffer = ffi.new("char[?]", self.length + 1, string)
+        assert(ffi.sizeof(self.buffer) == self.length + 1, "Did not allocate proper buffer length!")
+    end
 end
 
 function Buffer:getCharPointer(i)
+    assert((i or self.i) <= self.length, "Getting out of bounds char pointer")
+    assert((i or self.i) >= 0, "Getting out of bounds char pointer")
     return self.buffer + (i or self.i) - 1
 end
 
@@ -66,7 +77,7 @@ function Buffer:getChar()
    end
 
    local c = self.buffer[self.i-1]
-   if isLineSeperator(c) and (c ~= '\r' or self:peekChar() ~= '\n') then
+   if isLineSeperator(c) and (c ~= 13 --[[\r]] or self:peekChar() ~= 10 --[[\n]]) then
        self.line = self.line + 1
    end
    return c
@@ -169,7 +180,12 @@ end
 function Lexer:readUntilWhiteSpace(buffer)
     local s = ""
     while not isWhiteSpace(buffer:peekChar()) do
-        s = s .. self:getChar(nil, buffer)
+        local c = self:getChar(nil, buffer)
+        if c then
+            s = s .. c
+        else
+            break
+        end
     end
     return s
 end
@@ -194,6 +210,10 @@ function Lexer:getChar(char, buffer)
         char = buffer:getChar()
     end
 
+    if not char then
+        return nil
+    end
+
     if char < 0 then --utf8 char
         local len
         local modus = bit.band(char, 224)
@@ -213,6 +233,13 @@ function Lexer:getChar(char, buffer)
 
         if not len then
             self:error("Invalid UTF8 char", char, buffer)
+        end
+
+        local c = buffer:getCharPointer()
+        for i = 0, len do
+            if c == 0 then
+                self:error("Premature buffer end while reading UTF8 char", char, buffer)
+            end
         end
 
         local v = ffi.string(buffer:getCharPointer(), len)
@@ -984,7 +1011,7 @@ function Environment:executeCallback(callback, scope, trace, meta)
 end
 
 function Environment:run(code, scope, trace, meta)
-    if not core.instanceof(Buffer, code) then
+    if not core.instanceof(code, Buffer) then
         if type(code) == "table" then
             meta = meta or {fileShift = code.file, lineShift = code.line}
             code = code.value

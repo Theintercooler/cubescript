@@ -2,6 +2,7 @@ local traceback = require "debug".traceback
 local string = require "string"
 local math = require "math"
 local os = require "os"
+local ffi = require "ffi"
 local cubescript = require "cubescript"
 
 local padName = 20
@@ -57,6 +58,8 @@ local function assertEquals(n, args)
     if n ~= argc then
         fail()
         print(("[✖ %s] Some arguments are missing (%i ~= %i)"):format(pad("unkown"), n, argc))
+    elseif n == 0 then
+        print(("[✓ %s] No arguments were given, none were expected."):format(pad("unkown")))
     end
     total = total + 1
 end
@@ -66,36 +69,73 @@ local tests = {}
 function tests:buffer()
     local buf = "10"
 
-    local b = cubescript.Buffer:new (buf)
-    assertEquals(2, { ["char <0> "] = string.byte("1"), peekChar = b:peekChar()})
-    assertEquals(2, { ["char <0> "] = string.byte("1"), getChar = b:getChar()})
-    assertEquals(2, { ["char <1> "] = string.byte("0"), peekChar = b:peekChar()})
-    b:undoChar()
-    assertEquals(2, { ["char <0> "] = string.byte("1"), peekChar = b:peekChar()})
-    b:skipChar()
-    assertEquals(2, { ["char <1> "] = string.byte("0"), peekChar = b:peekChar()})
+    for k, b in pairs({
+        cubescript.Buffer:new (buf),
+        cubescript.Buffer:new (ffi.new("char [?]", #buf+1, buf)),
+    }) do
+    assertEquals(2, { ["0"] = 0, ["buffer.i"] = b.i})
+    assertEquals(2, { ["char <0> "] = string.byte("1"), peekChar = b:peekChar()})       --i = 0
+    assertEquals(2, { ["0"] = 0, ["buffer.i"] = b.i})
+    assertEquals(2, { ["char <0> "] = string.byte("1"), getChar = b:getChar()})         --i = 0 -> i = 1
+    assertEquals(2, { ["1"] = 1, ["buffer.i"] = b.i})
+    assertEquals(2, { ["char <1> "] = string.byte("0"), peekChar = b:peekChar()})       --i = 1
+    assertEquals(2, { ["1"] = 1, ["buffer.i"] = b.i})
+    b:undoChar()                                                                        --i = 1 -> i = 0
+    assertEquals(2, { ["0"] = 0, ["buffer.i"] = b.i})
+    assertEquals(2, { ["char <0> "] = string.byte("1"), peekChar = b:peekChar()})       --i = 0
+    assertEquals(2, { ["0"] = 0, ["buffer.i"] = b.i})
+    b:skipChar()                                                                        --i = 0 -> i = 1
+    assertEquals(2, { ["1"] = 1, ["buffer.i"] = b.i})
+    assertEquals(2, { ["char <1> "] = string.byte("0"), peekChar = b:peekChar()})       --i = 1
+    assertEquals(2, { ["1"] = 1, ["buffer.i"] = b.i})
+    b:skipChar()                                                                        --i = 1 -> i = 2
+    assertEquals(2, { ["2"] = 2, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 2 -> i = 3
+    assertEquals(2, { ["3"] = 3, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 3 -> i = 4
+    assertEquals(2, { ["4"] = 4, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 4 -> i = 5
+    assertEquals(2, { ["5"] = 5, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 5 -> i = 6
+    assertEquals(2, { ["6"] = 6, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 6 -> i = 7
+    assertEquals(2, { ["7"] = 7, ["buffer.i"] = b.i})
+    assertEquals(0, { ["nil"] = nil, getChar = b:getChar()})                            --i = 7 -> i = 8
+    assertEquals(2, { ["8"] = 8, ["buffer.i"] = b.i})
+    end
 end
 
 function tests:lexer()
     local values = {
-        { in_ = "10",    out = 10        },
-        { in_ = "0",     out = 0         },
-        { in_ = "-10",   out = -10       },
-        { in_ = "-0x2F", out = -0x2f     },
-        { in_ = "-0x2f", out = -0x2f     },
-        { in_ = "0x2F",  out = 0x2f      },
-        { in_ = "0x2f",  out = 0x2f      },
-        { in_ = ".23",   out = .23       },
-        { in_ = "0.23",  out = 0.23      },
-        { in_ = "0b011", out = 3         },
+        { in_ = "10",    out = 10,       type = "number"},
+        { in_ = "0",     out = 0,        type = "number"},
+        { in_ = "-10",   out = -10,      type = "number"},
+        { in_ = "-0x2F", out = -0x2f,    type = "number"},
+        { in_ = "-0x2f", out = -0x2f,    type = "number"},
+        { in_ = "0x2F",  out = 0x2f,     type = "number"},
+        { in_ = "0x2f",  out = 0x2f,     type = "number"},
+        { in_ = ".23",   out = .23,      type = "number"},
+        { in_ = "0.23",  out = 0.23,     type = "number"},
+        { in_ = "0b011", out = 3,        type = "number"},
+        { in_ = "aaa",   out = {"aaa"},  type = "word"  },
+        { in_ = "a0010", out = {"a0010"},type = "word"  },
+        { in_ = "=",     out = "=",      type = "operator"},
+        { in_ = "=s",    out = {"=s"},   type = "word"  },
     }
     for k, v in pairs(values) do
         local lex = cubescript.Lexer:new()
         local buf = cubescript.Buffer:new(v.in_)
         local token = lex:lexizeSingleToken(buf)
 
-        assertEquals(2, { ["token.type"] = token.type, ["tokenType.number"] = cubescript.tokenType.number})
-        assertEquals(2, { ["token.value"] = token.value, ["number <"..tostring(v.in_)..">"] = v.out})
+        assertEquals(2, { ["token.type"] = token.type, ["tokenType.".. v.type] = cubescript.tokenType[v.type]})
+
+        if type(v.out) == "table" then
+            for key, value in pairs(v.out) do
+                assertEquals(2, { ["token.value"] = token.value[key], [v.type.." <"..tostring(v.in_)..">"] = value})
+            end
+        else
+            assertEquals(2, { ["token.value"] = token.value, [v.type.." <"..tostring(v.in_)..">"] = v.out})
+        end
     end
 end
 
