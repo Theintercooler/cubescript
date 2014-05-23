@@ -193,9 +193,9 @@ end
 function Lexer:readEscapeSequence(buffer)
     local char = buffer:getChar()
     local escaped = ({
-        [102] = "\f",
-        [110] = "\n",
-        [114] = "\r"
+        [102] = 12, -- \f
+        [110] = 10, -- \n
+        [114] = 13, -- \r
     })[char]
     
     if not escaped then
