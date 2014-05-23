@@ -38,6 +38,14 @@ local function assertEquals(n, args)
         else
             local k = tostring(a)
             local v = tostring(value)
+            
+            k = k:gsub("\n", "\\n")
+            k = k:gsub("\f", "\\f")
+            k = k:gsub("\r", "\\r")
+            
+            v = v:gsub("\n", "\\n")
+            v = v:gsub("\f", "\\f")
+            v = v:gsub("\r", "\\r")
 
             if k:len() > 15 then
                 k = k:sub(1, 12).."..."
@@ -121,6 +129,7 @@ function tests:lexer()
         { in_ = "a0010", out = {"a0010"},type = "word"  },
         { in_ = "=",     out = "=",      type = "operator"},
         { in_ = "=s",    out = {"=s"},   type = "word"  },
+        { in_ = "\"^n^f^r\"", out = "\n\f\r",   type = "string"  },
     }
     for k, v in pairs(values) do
         local lex = cubescript.Lexer:new()
