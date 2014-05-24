@@ -274,6 +274,12 @@ function Lexer:parseString(buffer)
             self:error("Expected closing "..string.char(stringType), char, buffer)
         end
 
+        char = buffer:peekChar()
+         if char and not isWhiteSpace(char) and not self:isSeperator(char) then
+            buffer:skipChar()
+            self:error("Expected whitespace after string.", char, buffer)
+        end
+
         return token
     else
         local token = Token:new(tokenType.string)

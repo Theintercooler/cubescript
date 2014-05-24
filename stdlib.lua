@@ -1,4 +1,5 @@
 
+local string = require "string"
 local math = require "math"
 local bit = require "bit"
 local table = require "table"
@@ -15,6 +16,12 @@ api["local"] = function (env, scope, trace, ...)
         rawset(scope, var, "")
     end
     return ""
+end
+
+api["push"] = function(env, scope, trace, var, value, callback)
+    scope = cubescript.makeScope(scope)
+    rawset(scope, var, value)
+    return env:executeCallback(callback, scope, trace)
 end
 
 api["alias"] = function(env, scope, trace, name, value)
@@ -180,7 +187,7 @@ api[">"]        = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) > tonumber(args[k+1])) then
+            if not (env:toNumber(value) > env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
@@ -195,12 +202,11 @@ api[">="]       = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) >= tonumber(args[k+1])) then
+            if not (env:toNumber(value) >= env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
     end
-
     return env:toBool(true)
 end
 api[">=f"] = api[">="]
@@ -210,7 +216,7 @@ api["<"]        = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) < tonumber(args[k+1])) then
+            if not (env:toNumber(value) < env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
@@ -225,7 +231,7 @@ api["<="]        = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) <= tonumber(args[k+1])) then
+            if not (env:toNumber(value) <= env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
@@ -240,7 +246,7 @@ api["="]        = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) == tonumber(args[k+1])) then
+            if not (env:toNumber(value) == env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
@@ -255,7 +261,7 @@ api["!="]        = function (env, scope, trace, ...)
     assert(#args >= 2, "Not engough arguments provided for comperator.")
     for k, value in ipairs(args) do
         if k ~= #args then
-            if not (tonumber(value) ~= tonumber(args[k+1])) then
+            if not (env:toNumber(value) ~= env:toNumber(args[k+1])) then
                 return env:toBool(false)
             end
         end
@@ -270,8 +276,8 @@ api["!=s"]      = function(env, scope, trace, a, b)  return env:toBool(tostring(
 
 
 api["divf"]     = function(env, scope, trace, a, b)
-    a = tonumber(a)
-    b = tonumber(b)
+    a = env:toNumber(a)
+    b = env:toNumber(b)
     assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to =f operator.")
     return a / b
 end
@@ -462,6 +468,18 @@ api["cond"] = function(env, scope, trace, ...)
     end
 
     return ""
+end
+
+api["strstr"] = function(env, scope, trace, a, b)
+    return (string.find(a, b, 1, true) or 0) - 1
+end
+
+local function escapeNeedle(str)
+    return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", function(c) return "%" .. c end)
+end
+
+api["strreplace"] = function(env, scope, trace, str, needle, replacement)
+    return str:gsub(escapeNeedle(needle), replacement)
 end
 
 return {
