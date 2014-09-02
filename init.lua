@@ -628,7 +628,7 @@ function Lexer:parseComment(buffer)
         buffer:skipChar() -- skip the *
         char = buffer:getChar()
 
-        while char and not (char == "*" and buffer:peekChar() == "/") do
+        while char and not (char == 42 and buffer:peekChar() == 47) do
             token.value = token.value .. char
             char = buffer:getChar()
         end
