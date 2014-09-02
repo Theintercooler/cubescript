@@ -120,6 +120,10 @@ end
 local function loop(env, scope, trace, var, offset, step, length, body)
     local loopScope = cubescript.makeScope(scope)
 
+    offset = env:toNumber(offset)
+    step= env:toNumber(step)
+    length= env:toNumber(length)
+
     for i=0,length-1 do
         rawset(loopScope, var, offset + i * step)
         env:executeCallback(body, loopScope, trace)
@@ -280,6 +284,10 @@ api["divf"]     = function(env, scope, trace, a, b)
     b = env:toNumber(b)
     assert(type(a) ~= "nil" and type(b) ~= "nil", "Passing non number to =f operator.")
     return a / b
+end
+
+api["div"]      = function(...)
+    return math.floor(api["divf"](...) + 0.5)
 end
 
 api["!"]        = function(env, scope, trace, a)
