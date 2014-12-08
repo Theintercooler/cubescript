@@ -10,7 +10,7 @@ return function(src) return [[
             <h1>Cubescript runner <small>I CAN HAZ CUBESCRIPT ONLINE<small></h1>
             <form role="form" class="form-horizontal">
                 <div class="form-group">
-                    <textarea id="codeform">]] .. src .. [[</textarea>
+                    <textarea id="codeform">]] .. src:gsub('([<>%&])', function(x) return x == "<" and "&lt;" or x == ">" and "&gt;" or "&amp;" end) .. [[</textarea>
                 </div>
                 <div class="form-group">
                     <button type="button" class="btn btn-primary" id="button">Get the cube rolling!</button>
