@@ -59,8 +59,10 @@ local function parseList(list)
             v[k-offset] = table.concat(token.value, "")
         elseif token.type == cubescript.tokenType.seperator then
             offset = offset + 1
+        elseif token.type == cubescript.tokenType.endOfBuffer then
+            break
         else
-            p(token)
+            p(token, t)
             error "unkown token type in list"
         end
     end
@@ -184,6 +186,10 @@ function api.format (env, scope, trace, format, ...)
         format = format:gsub("%%"..i, arg)
     end
     return format
+end
+
+function api.strcmp(env,scope,trace,a,b)
+    return env:toBool(tostring(a) == tostring(b))
 end
 
 api[">"]        = function (env, scope, trace, ...)
@@ -446,6 +452,33 @@ api["if"]       = function(env, scope, trace, cond, yes, no)
     end
 end
 
+api["while"]       = function(env, scope, trace, cond, yes)
+    local argMeta = rawget(scope, "#args")
+
+    local function isTrue()
+        return env:isTrue(cond)
+    end
+
+    if argMeta[1].type == cubescript.tokenType.string then
+        function isTrue()
+            return env:isTrue(env:executeCallback(cond, scope, trace))
+        end
+    end
+
+    local maxLoop = 100
+    local lastResult
+    while isTrue() and maxLoop > 0 do
+        maxLoop = maxLoop - 1
+        lastResult = env:executeCallback(yes, scope, trace)
+    end
+
+    if maxLoop <= 0 then
+        error("Loop exceeds maximum loopyness.")
+    end
+
+    return lastResult
+end
+
 api["result"] = function(env, scope, trace, value)
     return value
 end
@@ -471,7 +504,6 @@ api["cond"] = function(env, scope, trace, ...)
 
     if cond then
         --Default value
-        p("default", cond)
         env:executeCallback(cond, scope, trace)
     end
 
