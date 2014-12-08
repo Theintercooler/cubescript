@@ -4,6 +4,7 @@ local math = require "math"
 local os = require "os"
 local ffi = require "ffi"
 local cubescript = require "cubescript"
+local stdlib = require "cubescript.stdlib"
 
 local padName = 20
 local function pad(name, i)
@@ -214,6 +215,20 @@ function tests:utf8()
     end)
     local runResult = env:run(func .. "  0x20")
     assertEquals(3, {["numCalls"] = ran, ["env:run(func)"] = runResult, ["1"] = 1})
+end
+
+function tests:stdlib_listlen()
+    local env = cubescript.createEnvironment()
+    env:registerLibrary(stdlib.api)
+    for _, test in pairs({
+        { "a b c d", 4 },
+        { "a b [c] d", 4 },
+        { "a    b [c]\n\n\t d", 4 },
+    }) do
+        local string, length = test[1], test[2]
+        local res = env:run("listlen ["..string.."]")
+        assertEquals(2, {["length"] = length, ["listlen ["..string.."]"] = res})
+    end
 end
 
 

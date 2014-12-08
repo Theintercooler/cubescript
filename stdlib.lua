@@ -50,7 +50,7 @@ local function parseList(list)
     local buffer = cubescript.Buffer:new(list)
 
     local v = {}
-    local offset = 1
+    local offset = 0
     local t = lexer:lexize(buffer)
     for k, token in pairs(t) do
         if token.type == cubescript.tokenType.string or token.type == cubescript.tokenType.number then

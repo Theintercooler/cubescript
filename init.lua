@@ -1264,6 +1264,12 @@ function Environment:register(name, cb, scope, override)
     scope[name] = cb
 end
 
+function Environment:registerLibrary(api, scope, override)
+    for k, v in pairs(api) do
+        self:register(k, v, scope, override)
+    end
+end
+
 function Environment:isBool(value)
     return value == "" or value == "1" or value == "0"
 end
