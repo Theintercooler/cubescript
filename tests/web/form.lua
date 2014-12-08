@@ -4,6 +4,11 @@ return function(src) return [[
     <head>
         <link rel="stylesheet" href="http://s.ibts.me/codemirror/4.1/lib/codemirror.css">
         <link href="http://s.ibts.me/bootstrap/3.1.1/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            .CodeMirror {
+                font-size: 1.5em;
+            }
+        </style>
     </head>
     <body>
         <div class="container">
@@ -18,6 +23,7 @@ return function(src) return [[
                 </div>
             </form>
             <pre id="result"></pre>
+            <a href="https://github.com/Theintercooler/cubescript">Source</a>
         </div>
         <script src="http://s.ibts.me/jquery/jquery-1.11.1.min.js"></script>
         <script src="http://s.ibts.me/bootstrap/3.1.1/3.1.1/js/bootstrap.min.js"></script>
