@@ -70,15 +70,43 @@ local function parseList(list)
     return v
 end
 
-function api.looplist (env, scope, trace, var, list, callback)
+function api.looplistn (env, scope, trace, nvar, ...)
+    local vars = {}
+    local list, callback
+    local nvar2 = nvar
+
+    for k, v in pairs({...}) do
+        if nvar > 0 then
+            nvar = nvar - 1
+            vars[#vars+1] = v
+        elseif list == nil then
+            list = v
+        elseif callback == nil then
+            callback = v
+        end
+    end
+
     list = parseList(list)
     scope = cubescript.makeScope(scope)
-    for k, value in pairs(list) do
-        rawset(scope, var, value)
-        env:executeCallback(callback, scope, trace)
+    local v = {}
+    for k, val in pairs(list) do
+        v[#v+1] = val
+
+        if #v >= nvar2 then
+            for j, varname in ipairs(vars) do
+                rawset(scope, varname, v[j])
+            end
+            env:executeCallback(callback, scope, trace)
+            v = {}
+        end
     end
     return ""
 end
+
+api["looplist" ] = function(env, scope, trace, var1,                    list, callback) return api.looplistn(env, scope, trace, 1, var1,                    list, callback) end
+api["looplist2"] = function(env, scope, trace, var1, var2,              list, callback) return api.looplistn(env, scope, trace, 2, var1, var2,              list, callback) end
+api["looplist3"] = function(env, scope, trace, var1, var2, var3,        list, callback) return api.looplistn(env, scope, trace, 3, var1, var2, var3,        list, callback) end
+api["looplist4"] = function(env, scope, trace, var1, var2, var3, var4,  list, callback) return api.looplistn(env, scope, trace, 4, var1, var2, var3, var4,  list, callback) end
 
 function api.looplistconcat (env, scope, trace, var, list, callback)
     list = parseList(list)
