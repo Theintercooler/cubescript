@@ -91,15 +91,20 @@ function api.looplistconcat (env, scope, trace, var, list, callback)
     return table.concat(r, " ")
 end
 
-function api.at(env, scope, trace, list, i)
+function api.at(env, scope, trace, list, i, ...)
     list = parseList(list)
-    if type(list[i]) == "nil" then
+    if type(list[i+1]) == "nil" then
         if env.debug then
             p("warning out of list AT", list, i)
         end
         return ""
     else
-        return list[i]
+        local v = type(list[i+1]) == "table" and table.concat(list[i+1], " ") or list[i+1]
+        if #{...} > 0 then
+            return api.at(env, scope, trace, v, ...)
+        else
+            return v
+        end
     end
 end
 

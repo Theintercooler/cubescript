@@ -1,6 +1,7 @@
 local traceback = require "debug".traceback
 local string = require "string"
 local math = require "math"
+local table = require "table"
 local os = require "os"
 local ffi = require "ffi"
 local cubescript = require "cubescript"
@@ -225,9 +226,26 @@ function tests:stdlib_listlen()
         { "a b [c] d", 4 },
         { "a    b [c]\n\n\t d", 4 },
     }) do
-        local string, length = test[1], test[2]
+        local string, length = unpack(test)
         local res = env:run("listlen ["..string.."]")
         assertEquals(2, {["length"] = length, ["listlen ["..string.."]"] = res})
+    end
+end
+
+function tests:stdlib_at()
+    local env = cubescript.createEnvironment()
+    env:registerLibrary(stdlib.api)
+    for _, test in pairs({
+        { "a b c d", {2}, "c" },
+        { "a b [c] d", {0}, "a"},
+        { "a    b [c] 1 233\n\n\t d", {4}, 233 },
+        { "a    b [c] 1 [ \"a \" ] 233\n\n\t d", {4}, " \"a \" " },
+        { "a    b [c] 1 [ \"a \" ] 233\n\n\t d", {4, 0}, "a " },
+    }) do
+        local string, index, value = unpack(test)
+        index = table.concat(index, " ")
+        local res = env:run("at ["..string.."] ".. index)
+        assertEquals(2, {["value"] = value, ["listlen ["..string.."] "..index] = res})
     end
 end
 
